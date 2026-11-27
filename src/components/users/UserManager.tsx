@@ -33,8 +33,13 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { generateStrongPassword } from '../../lib/passwordCrypto';
-import { saveUserCredentialOnServer } from '../../lib/sessionClient';
-import { provisionFirebaseUserWithPassword, isFirebaseAdminAccount } from '../../lib/firebase';
+import { createServerSession, saveUserCredentialOnServer } from '../../lib/sessionClient';
+import {
+  auth,
+  provisionFirebaseUserWithPassword,
+  isFirebaseAdminAccount,
+  sendPasswordResetEmail,
+} from '../../lib/firebase';
 
 export const UserManager: React.FC = () => {
   const {
@@ -167,8 +172,7 @@ export const UserManager: React.FC = () => {
     try {
       const now = new Date().toISOString();
       const newUserId = `usr-${Date.now()}`;
-
-      const serverSave = await saveUserCredentialOnServer({
+      const payload = {
         userId: newUserId,
         email: trimmedEmail,
         name: trimmedName,
@@ -177,10 +181,72 @@ export const UserManager: React.FC = () => {
         locationIds: uLocationId ? [uLocationId] : [],
         isActive: true,
         password: uPassword,
+      };
+
+      await auth.authStateReady().catch(() => {});
+      let serverSave = await saveUserCredentialOnServer(payload, {
+        skipExpiredNotify: Boolean(auth.currentUser),
       });
 
-      if (!serverSave.ok) {
-        setUserFormError(serverSave.message || 'Impossible d’enregistrer le mot de passe sur le serveur.');
+      // Re-sync server session automatically if Firebase user is active and server token was missing or invalidated
+      if (!serverSave.ok && !serverSave.apiUnavailable && serverSave.status === 401 && auth.currentUser) {
+        const fbToken = await auth.currentUser.getIdToken(true).catch(() => null);
+        if (fbToken) {
+          const recreated = await createServerSession({ firebaseIdToken: fbToken });
+          if (recreated.ok) {
+            serverSave = await saveUserCredentialOnServer(payload);
+          }
+        }
+      }
+
+      if (!serverSave.ok && !serverSave.apiUnavailable) {
+        setUserFormError(
+          serverSave.message || 'Impossible d’enregistrer le mot de passe sur le serveur.'
+        );
+        return;
+      }
+
+      const fbProvision = await provisionFirebaseUserWithPassword(trimmedEmail, uPassword);
+
+      if (serverSave.apiUnavailable && !fbProvision.ok) {
+        if (fbProvision.reason === 'auth/email-already-in-use') {
+          addUser({
+            id: newUserId,
+            businessId: currentBusiness.id,
+            name: trimmedName,
+            email: trimmedEmail,
+            hasPassword: true,
+            passwordUpdatedAt: now,
+            roleId: uRoleId,
+            locationIds: uLocationId ? [uLocationId] : [],
+            isActive: true,
+            status: 'active',
+          });
+          setUserFeedbackBanner(
+            `Compte ERP ajouté pour ${trimmedName} (${trimmedEmail}). L’adresse email existait déjà dans Firebase Authentication.`
+          );
+          setUName('');
+          setUEmail('');
+          setUPassword('');
+          setShowUPassword(false);
+          setUserFormError(null);
+          setShowAddUserModal(false);
+          return;
+        }
+
+        if (fbProvision.reason === 'auth/operation-not-allowed') {
+          setUserFormError(
+            'La connexion Email/Mot de passe doit être activée dans Firebase Console > Authentication.'
+          );
+          return;
+        }
+        if (fbProvision.reason === 'auth/weak-password') {
+          setUserFormError('Le mot de passe doit contenir au moins 8 caractères.');
+          return;
+        }
+        setUserFormError(
+          'Impossible de créer le compte dans Firebase Authentication. Vérifiez la connexion et réessayez.'
+        );
         return;
       }
 
@@ -189,6 +255,7 @@ export const UserManager: React.FC = () => {
         businessId: currentBusiness.id,
         name: trimmedName,
         email: trimmedEmail,
+        firebaseUid: fbProvision.uid,
         hasPassword: true,
         passwordUpdatedAt: serverSave.passwordUpdatedAt || now,
         roleId: uRoleId,
@@ -196,9 +263,6 @@ export const UserManager: React.FC = () => {
         isActive: true,
         status: 'active',
       });
-
-      // Best-effort secondary Firebase Auth provisioning without logging out current admin
-      await provisionFirebaseUserWithPassword(trimmedEmail, uPassword);
 
       setUserFeedbackBanner(
         `Compte créé pour ${trimmedName} (${trimmedEmail}). L’utilisateur peut maintenant se connecter avec son mot de passe.`
@@ -262,7 +326,7 @@ export const UserManager: React.FC = () => {
 
     setIsSavingUser(true);
     try {
-      const serverSave = await saveUserCredentialOnServer({
+      const payload = {
         userId: editingUser.id,
         email: trimmedEmail,
         name: trimmedName,
@@ -270,16 +334,51 @@ export const UserManager: React.FC = () => {
         roleId: editURoleId,
         locationIds: editULocationId ? [editULocationId] : [],
         isActive: editUIsActive,
+        firebaseUid: editingUser.firebaseUid,
         password: editUPassword || undefined,
+      };
+
+      await auth.authStateReady().catch(() => {});
+      let serverSave = await saveUserCredentialOnServer(payload, {
+        skipExpiredNotify: Boolean(auth.currentUser),
       });
 
-      if (!serverSave.ok) {
-        setEditUserFormError(serverSave.message || 'Erreur lors de la mise à jour sur le serveur.');
+      if (!serverSave.ok && !serverSave.apiUnavailable && serverSave.status === 401 && auth.currentUser) {
+        const fbToken = await auth.currentUser.getIdToken(true).catch(() => null);
+        if (fbToken) {
+          const recreated = await createServerSession({ firebaseIdToken: fbToken });
+          if (recreated.ok) {
+            serverSave = await saveUserCredentialOnServer(payload);
+          }
+        }
+      }
+
+      if (!serverSave.ok && !serverSave.apiUnavailable) {
+        setEditUserFormError(
+          serverSave.message || 'Erreur lors de la mise à jour sur le serveur.'
+        );
         return;
       }
 
+      let provisionedUid = editingUser.firebaseUid;
+      let resetEmailSent = false;
+
       if (editUPassword) {
-        await provisionFirebaseUserWithPassword(trimmedEmail, editUPassword);
+        const fbProvision = await provisionFirebaseUserWithPassword(trimmedEmail, editUPassword);
+        if (fbProvision.ok && fbProvision.uid) {
+          provisionedUid = fbProvision.uid;
+        } else if (serverSave.apiUnavailable && fbProvision.reason === 'auth/email-already-in-use') {
+          resetEmailSent = await sendPasswordResetEmail(auth, trimmedEmail)
+            .then(() => true)
+            .catch(() => false);
+        } else if (serverSave.apiUnavailable && !fbProvision.ok) {
+          setEditUserFormError(
+            fbProvision.reason === 'auth/operation-not-allowed'
+              ? 'La connexion Email/Mot de passe doit être activée dans Firebase Console > Authentication.'
+              : 'Impossible de mettre à jour le mot de passe dans Firebase Authentication.'
+          );
+          return;
+        }
       }
 
       const { passwordHash: _stripHash, ...cleanEditingUser } = editingUser;
@@ -287,6 +386,7 @@ export const UserManager: React.FC = () => {
         ...cleanEditingUser,
         name: trimmedName,
         email: trimmedEmail,
+        firebaseUid: serverSave.firebaseUid || provisionedUid,
         roleId: editURoleId,
         locationIds: editULocationId ? [editULocationId] : [],
         isActive: editUIsActive,
@@ -296,7 +396,9 @@ export const UserManager: React.FC = () => {
       });
 
       setUserFeedbackBanner(
-        editUPassword
+        resetEmailSent
+          ? `Profil mis à jour pour ${trimmedName}. Un email de réinitialisation du mot de passe a été envoyé à ${trimmedEmail} via Firebase.`
+          : editUPassword
           ? `Profil et mot de passe mis à jour pour ${trimmedName}.`
           : `Profil mis à jour pour ${trimmedName}.`
       );

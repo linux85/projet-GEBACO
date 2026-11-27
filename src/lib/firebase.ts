@@ -425,15 +425,16 @@ export async function signInWithGoogle() {
 export async function provisionFirebaseUserWithPassword(
   email: string,
   password: string
-): Promise<{ ok: boolean; reason?: string }> {
+): Promise<{ ok: boolean; uid?: string; reason?: string }> {
   const SECONDARY_APP_NAME = 'user-provisioning-app';
   try {
     const existingSecondary = getApps().find((a) => a.name === SECONDARY_APP_NAME);
     const secondaryApp = existingSecondary || initializeApp(firebaseConfig, SECONDARY_APP_NAME);
     const secondaryAuth = getAuth(secondaryApp);
-    await createUserWithEmailAndPassword(secondaryAuth, email.trim(), password);
+    const cred = await createUserWithEmailAndPassword(secondaryAuth, email.trim(), password);
+    const uid = cred.user.uid;
     await firebaseSignOut(secondaryAuth);
-    return { ok: true };
+    return { ok: true, uid };
   } catch (error: any) {
     const code = error?.code || 'unknown';
     return { ok: false, reason: code };

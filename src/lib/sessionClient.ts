@@ -354,19 +354,33 @@ export async function pingServerSession(): Promise<{
   }
 }
 
-export async function saveUserCredentialOnServer(payload: {
-  userId: string;
-  email: string;
-  name: string;
-  businessId: string;
-  roleId: string;
-  locationIds: string[];
-  isActive: boolean;
-  password?: string;
-}): Promise<{ ok: boolean; hasPassword?: boolean; passwordUpdatedAt?: string; message?: string }> {
+export async function saveUserCredentialOnServer(
+  payload: {
+    userId: string;
+    email: string;
+    name: string;
+    businessId: string;
+    roleId: string;
+    locationIds: string[];
+    isActive: boolean;
+    firebaseUid?: string;
+    password?: string;
+  },
+  options?: { skipExpiredNotify?: boolean }
+): Promise<{
+  ok: boolean;
+  status?: number;
+  code?: string;
+  apiUnavailable?: boolean;
+  firebaseUid?: string;
+  hasPassword?: boolean;
+  passwordUpdatedAt?: string;
+  message?: string;
+}> {
   try {
     const res = await apiFetch('/api/admin/users/password', {
       method: 'POST',
+      skipExpiredNotify: options?.skipExpiredNotify,
       headers: {
         'Content-Type': 'application/json',
       },
@@ -377,18 +391,40 @@ export async function saveUserCredentialOnServer(payload: {
     if (res.ok && data?.ok) {
       return {
         ok: true,
+        status: res.status,
+        firebaseUid: typeof data.firebaseUid === 'string' ? data.firebaseUid : payload.firebaseUid,
         hasPassword: Boolean(data.hasPassword),
         passwordUpdatedAt: data.passwordUpdatedAt,
       };
     }
 
+    const apiUnavailable = isBackendApiUnavailable(res, data);
+    if (apiUnavailable) {
+      return {
+        ok: false,
+        status: res.status,
+        apiUnavailable: true,
+        message: 'Serveur API indisponible : bascule vers Firebase.',
+      };
+    }
+
     return {
       ok: false,
-      message: data?.message || 'Erreur lors de la mise à jour sécurisée sur le serveur.',
+      status: res.status,
+      code: typeof data?.code === 'string' ? data.code : undefined,
+      message:
+        typeof data?.message === 'string' && data.message.trim().length > 0
+          ? data.message
+          : res.status === 401
+          ? 'Votre session administrateur a expiré. Veuillez vous reconnecter.'
+          : res.status === 403
+          ? 'Accès refusé : permissions administrateur requises.'
+          : 'Erreur lors de la mise à jour sécurisée sur le serveur.',
     };
   } catch {
     return {
       ok: false,
+      apiUnavailable: true,
       message: 'Serveur inaccessible pour enregistrer le mot de passe.',
     };
   }

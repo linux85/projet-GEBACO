@@ -751,12 +751,14 @@ function isSameOriginMutationAllowed(req: Request): boolean {
   }
 
   const origin = req.headers.origin;
-  const host = (req.headers['x-forwarded-host'] || req.headers.host || '') as string;
+  const rawHost = (req.headers['x-forwarded-host'] || req.headers.host || '') as string;
+  const host = rawHost.split(',')[0].trim();
 
   if (typeof origin === 'string' && origin.length > 0 && host) {
     try {
+      const normalizeHost = (value: string) => value.toLowerCase().replace(/:(80|443)$/, '');
       const originHost = new URL(origin).host;
-      if (originHost !== host) {
+      if (normalizeHost(originHost) !== normalizeHost(host)) {
         return false;
       }
     } catch {
@@ -1202,63 +1204,86 @@ async function createApp() {
     requireActiveSession,
     requirePermission('manage_users'),
     async (req: AuthenticatedRequest, res: Response) => {
-      const body = req.body && typeof req.body === 'object' ? req.body : {};
-      const userId = typeof body.userId === 'string' ? body.userId.trim() : '';
-      const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
-      const name = typeof body.name === 'string' ? body.name.trim() : '';
-      const businessId = typeof body.businessId === 'string' ? body.businessId.trim() : 'biz-1';
-      const roleId = typeof body.roleId === 'string' ? body.roleId.trim() : 'role-cashier';
-      const isActive = typeof body.isActive === 'boolean' ? body.isActive : true;
-      const password = typeof body.password === 'string' ? body.password : '';
+      try {
+        const body = req.body && typeof req.body === 'object' ? req.body : {};
+        const userId = typeof body.userId === 'string' ? body.userId.trim() : '';
+        const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+        const name = typeof body.name === 'string' ? body.name.trim() : '';
+        const businessId = typeof body.businessId === 'string' && body.businessId.trim() ? body.businessId.trim() : 'biz-1';
+        const requestedRoleId = typeof body.roleId === 'string' && body.roleId.trim() ? body.roleId.trim() : 'role-cashier';
+        const requestedIsActive = typeof body.isActive === 'boolean' ? body.isActive : true;
+        const password = typeof body.password === 'string' ? body.password : '';
 
-      if (!USER_ID_PATTERN.test(userId) || !EMAIL_PATTERN.test(email) || email.length > 254) {
-        res.status(400).json({
-          code: 'INVALID_INPUT',
-          message: 'Identifiant ou adresse email invalide.',
+        if (!USER_ID_PATTERN.test(userId) || !EMAIL_PATTERN.test(email) || email.length > 254) {
+          res.status(400).json({
+            code: 'INVALID_INPUT',
+            message: 'Identifiant ou adresse email invalide.',
+          });
+          return;
+        }
+
+        if (password && (password.length < 8 || password.length > 256)) {
+          res.status(400).json({
+            code: 'INVALID_PASSWORD',
+            message: 'Le mot de passe doit contenir entre 8 et 256 caractères.',
+          });
+          return;
+        }
+
+        const existingById = Array.from(serverUsersByEmail.entries()).find(([, u]) => u.id === userId);
+        const existing = serverUsersByEmail.get(email) || existingById?.[1];
+        if (existingById && existingById[0] !== email) {
+          serverUsersByEmail.delete(existingById[0]);
+        }
+
+        const firebaseUid =
+          typeof body.firebaseUid === 'string' && body.firebaseUid.trim()
+            ? body.firebaseUid.trim()
+            : existing?.firebaseUid;
+
+        const isFbAdmin = isFirebaseAdminIdentity(firebaseUid, email) || userId === 'usr-firebase-admin';
+        const roleId = isFbAdmin ? 'role-admin' : requestedRoleId;
+        const isActive = isFbAdmin ? true : requestedIsActive;
+
+        let nextHash = existing?.passwordHash;
+        let passwordUpdatedAt = existing?.passwordUpdatedAt;
+
+        if (password) {
+          nextHash = await hashPasswordScrypt(password);
+          passwordUpdatedAt = new Date().toISOString();
+        }
+
+        const updatedRecord: ServerUserRecord = {
+          id: userId,
+          businessId,
+          name: name || existing?.name || email,
+          email,
+          firebaseUid,
+          roleId,
+          locationIds: Array.isArray(body.locationIds)
+            ? body.locationIds.filter((l: unknown): l is string => typeof l === 'string')
+            : existing?.locationIds || [],
+          isActive,
+          passwordHash: nextHash,
+          passwordUpdatedAt,
+        };
+
+        serverUsersByEmail.set(email, updatedRecord);
+        await persistUserCredentialToFirestore(updatedRecord);
+
+        res.json({
+          ok: true,
+          userId: updatedRecord.id,
+          firebaseUid: updatedRecord.firebaseUid,
+          hasPassword: Boolean(updatedRecord.passwordHash),
+          passwordUpdatedAt: updatedRecord.passwordUpdatedAt,
         });
-        return;
-      }
-
-      if (password && (password.length < 8 || password.length > 256)) {
-        res.status(400).json({
-          code: 'INVALID_PASSWORD',
-          message: 'Le mot de passe doit contenir entre 8 et 256 caractères.',
+      } catch {
+        res.status(500).json({
+          code: 'SERVER_ERROR',
+          message: 'Impossible d’enregistrer les informations utilisateur sur le serveur.',
         });
-        return;
       }
-
-      const existing = serverUsersByEmail.get(email);
-      let nextHash = existing?.passwordHash;
-      let passwordUpdatedAt = existing?.passwordUpdatedAt;
-
-      if (password) {
-        nextHash = await hashPasswordScrypt(password);
-        passwordUpdatedAt = new Date().toISOString();
-      }
-
-      const updatedRecord: ServerUserRecord = {
-        id: userId,
-        businessId,
-        name: name || existing?.name || email,
-        email,
-        roleId,
-        locationIds: Array.isArray(body.locationIds)
-          ? body.locationIds.filter((l: unknown): l is string => typeof l === 'string')
-          : existing?.locationIds || [],
-        isActive,
-        passwordHash: nextHash,
-        passwordUpdatedAt,
-      };
-
-      serverUsersByEmail.set(email, updatedRecord);
-      await persistUserCredentialToFirestore(updatedRecord);
-
-      res.json({
-        ok: true,
-        userId: updatedRecord.id,
-        hasPassword: Boolean(updatedRecord.passwordHash),
-        passwordUpdatedAt: updatedRecord.passwordUpdatedAt,
-      });
     }
   );
 

@@ -940,7 +940,7 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!state.isAuthenticated) return;
     let cancelled = false;
 
-    void checkServerSession().then((res) => {
+    void checkServerSession().then(async (res) => {
       if (cancelled) return;
       if (res.authenticated) {
         setIdleTimeoutMs(res.idleTimeoutMs);
@@ -992,6 +992,25 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return;
       }
       if (res.code === 'UNAUTHENTICATED' || res.code === 'SESSION_REVOKED') {
+        if (res.code === 'UNAUTHENTICATED') {
+          await auth.authStateReady().catch(() => {});
+          if (cancelled) return;
+          if (auth.currentUser) {
+            const refreshedToken = await auth.currentUser.getIdToken().catch(() => null);
+            if (cancelled) return;
+            if (refreshedToken) {
+              const recreated = await createServerSession({ firebaseIdToken: refreshedToken });
+              if (cancelled) return;
+              if (recreated.ok || recreated.offline || recreated.apiUnavailable) {
+                if (recreated.ok) {
+                  setIdleTimeoutMs(recreated.idleTimeoutMs);
+                  setWarningLeadMs(recreated.warningLeadMs);
+                }
+                return;
+              }
+            }
+          }
+        }
         logout();
       }
     });
