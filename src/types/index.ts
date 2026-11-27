@@ -33,6 +33,7 @@ export interface User {
   businessId: string;
   name: string;
   email: string;
+  firebaseUid?: string;
   passwordHash?: string;
   hasPassword?: boolean;
   passwordUpdatedAt?: string;

@@ -63,8 +63,15 @@ const SESSION_SIGNING_KEY =
     : crypto.randomBytes(32).toString('hex');
 
 const ADMIN_DEFAULT_EMAIL = 'jnoufe@gmail.com';
+const FIREBASE_ADMIN_UID = 'wepPnaRsYuW3kHDuNBTQdjMZLNj1';
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const USER_ID_PATTERN = /^[a-zA-Z0-9._-]{1,128}$/;
+
+function isFirebaseAdminIdentity(uid?: string | null, email?: string | null): boolean {
+  if (uid && uid.trim() === FIREBASE_ADMIN_UID) return true;
+  if (email && email.trim().toLowerCase() === ADMIN_DEFAULT_EMAIL) return true;
+  return false;
+}
 
 interface ServerRoleRecord {
   id: string;
@@ -78,6 +85,7 @@ interface ServerUserRecord {
   businessId: string;
   name: string;
   email: string;
+  firebaseUid?: string;
   roleId: string;
   locationIds: string[];
   isActive: boolean;
@@ -88,6 +96,7 @@ interface ServerUserRecord {
 interface SessionRecord {
   sid: string;
   userId: string;
+  firebaseUid?: string;
   email: string;
   roleId: string;
   businessId: string;
@@ -360,14 +369,17 @@ async function syncDirectoryFromFirestore(force = false): Promise<void> {
                     ? u.passwordHash
                     : existing?.passwordHash;
 
+                const fbUid = typeof u.firebaseUid === 'string' ? u.firebaseUid : existing?.firebaseUid;
+                const isFbAdmin = isFirebaseAdminIdentity(fbUid, emailKey);
                 serverUsersByEmail.set(emailKey, {
                   id: u.id,
                   businessId: String(u.businessId || existing?.businessId || 'biz-1'),
                   name: String(u.name || existing?.name || emailKey),
                   email: emailKey,
-                  roleId: String(u.roleId || existing?.roleId || 'role-cashier'),
+                  firebaseUid: fbUid,
+                  roleId: isFbAdmin ? 'role-admin' : String(u.roleId || existing?.roleId || 'role-cashier'),
                   locationIds: Array.isArray(u.locationIds) ? u.locationIds : [],
-                  isActive: u.isActive !== false,
+                  isActive: isFbAdmin ? true : u.isActive !== false,
                   passwordHash: resolvedHash,
                   passwordUpdatedAt: u.passwordUpdatedAt || existing?.passwordUpdatedAt,
                 });
@@ -398,14 +410,17 @@ async function syncDirectoryFromFirestore(force = false): Promise<void> {
                 ? existing.passwordHash
                 : cloudHash || existing?.passwordHash;
 
+            const fbUid = readFirestoreString(fields.firebaseUid) || existing?.firebaseUid;
+            const isFbAdmin = isFirebaseAdminIdentity(fbUid, email);
             serverUsersByEmail.set(email, {
               id,
               businessId: readFirestoreString(fields.businessId) || existing?.businessId || 'biz-1',
               name: readFirestoreString(fields.name) || existing?.name || email,
               email,
-              roleId: readFirestoreString(fields.roleId) || existing?.roleId || 'role-cashier',
+              firebaseUid: fbUid,
+              roleId: isFbAdmin ? 'role-admin' : readFirestoreString(fields.roleId) || existing?.roleId || 'role-cashier',
               locationIds: existing?.locationIds || [],
-              isActive: readFirestoreBool(fields.isActive) ?? existing?.isActive ?? true,
+              isActive: isFbAdmin ? true : readFirestoreBool(fields.isActive) ?? existing?.isActive ?? true,
               passwordHash: resolvedHash,
               passwordUpdatedAt:
                 readFirestoreString(fields.passwordUpdatedAt) || existing?.passwordUpdatedAt,
@@ -431,6 +446,7 @@ async function persistUserCredentialToFirestore(user: ServerUserRecord): Promise
       'updateMask.fieldPaths=businessId',
       'updateMask.fieldPaths=roleId',
       'updateMask.fieldPaths=isActive',
+      ...(user.firebaseUid ? ['updateMask.fieldPaths=firebaseUid'] : []),
       ...(user.passwordHash ? ['updateMask.fieldPaths=passwordHash'] : []),
       ...(user.passwordUpdatedAt ? ['updateMask.fieldPaths=passwordUpdatedAt'] : []),
     ].join('&');
@@ -443,6 +459,9 @@ async function persistUserCredentialToFirestore(user: ServerUserRecord): Promise
       roleId: { stringValue: user.roleId },
       isActive: { booleanValue: user.isActive },
     };
+    if (user.firebaseUid) {
+      fields.firebaseUid = { stringValue: user.firebaseUid };
+    }
     if (user.passwordHash) {
       fields.passwordHash = { stringValue: user.passwordHash };
     }
@@ -462,6 +481,7 @@ async function persistUserCredentialToFirestore(user: ServerUserRecord): Promise
 
 async function verifyFirebaseIdTokenWithGoogle(idToken: string): Promise<{
   valid: boolean;
+  uid?: string;
   email?: string;
   displayName?: string;
   photoURL?: string;
@@ -487,6 +507,7 @@ async function verifyFirebaseIdTokenWithGoogle(idToken: string): Promise<{
     }
     return {
       valid: true,
+      uid: typeof fbUser.localId === 'string' ? fbUser.localId : undefined,
       email: fbUser.email.trim().toLowerCase(),
       displayName: typeof fbUser.displayName === 'string' ? fbUser.displayName : undefined,
       photoURL: typeof fbUser.photoUrl === 'string' ? fbUser.photoUrl : undefined,
@@ -499,7 +520,7 @@ async function verifyFirebaseIdTokenWithGoogle(idToken: string): Promise<{
 async function verifyFirebaseEmailPasswordWithGoogle(
   email: string,
   password: string
-): Promise<{ valid: boolean; email?: string }> {
+): Promise<{ valid: boolean; uid?: string; email?: string }> {
   try {
     const res = await fetch(
       `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${encodeURIComponent(firebaseConfig.apiKey)}`,
@@ -512,7 +533,11 @@ async function verifyFirebaseEmailPasswordWithGoogle(
     if (!res.ok) return { valid: false };
     const data = (await res.json()) as any;
     if (typeof data?.email !== 'string') return { valid: false };
-    return { valid: true, email: data.email.trim().toLowerCase() };
+    return {
+      valid: true,
+      uid: typeof data.localId === 'string' ? data.localId : undefined,
+      email: data.email.trim().toLowerCase(),
+    };
   } catch {
     return { valid: false };
   }
@@ -704,6 +729,7 @@ function issueRegeneratedSession(
   const session: SessionRecord = {
     sid,
     userId: user.id,
+    firebaseUid: user.firebaseUid,
     email: user.email,
     roleId: user.roleId,
     businessId: user.businessId,
@@ -937,20 +963,39 @@ async function createApp() {
       const fbCheck = await verifyFirebaseEmailPasswordWithGoogle(email, password);
       if (fbCheck.valid && fbCheck.email) {
         authenticated = true;
+        const isFbAdmin = isFirebaseAdminIdentity(fbCheck.uid, fbCheck.email);
         if (!user) {
-          const isDefaultAdmin = fbCheck.email === ADMIN_DEFAULT_EMAIL;
+          const defaultAdminTaken = Array.from(serverUsersByEmail.values()).some(
+            (u) => u.id === 'usr-firebase-admin' && u.email !== fbCheck.email
+          );
           user = {
-            id: isDefaultAdmin ? 'usr-firebase-admin' : `usr-${Date.now()}`,
+            id: isFbAdmin
+              ? defaultAdminTaken
+                ? `usr-firebase-${fbCheck.uid || Date.now()}`
+                : 'usr-firebase-admin'
+              : `usr-${fbCheck.uid || Date.now()}`,
             businessId: 'biz-1',
-            name: fbCheck.email.split('@')[0] || 'Utilisateur',
+            name: isFbAdmin ? 'Administrateur Firebase' : fbCheck.email.split('@')[0] || 'Utilisateur',
             email: fbCheck.email,
-            roleId: isDefaultAdmin ? 'role-admin' : 'role-cashier',
+            firebaseUid: fbCheck.uid,
+            roleId: isFbAdmin ? 'role-admin' : 'role-cashier',
             locationIds: ['all'],
             isActive: true,
           };
           serverUsersByEmail.set(fbCheck.email, user);
+        } else if (isFbAdmin) {
+          user.roleId = 'role-admin';
+          user.firebaseUid = fbCheck.uid || user.firebaseUid;
+          user.isActive = true;
+        } else if (fbCheck.uid && !user.firebaseUid) {
+          user.firebaseUid = fbCheck.uid;
         }
       }
+    }
+
+    if (authenticated && user && isFirebaseAdminIdentity(user.firebaseUid, user.email)) {
+      user.roleId = 'role-admin';
+      user.isActive = true;
     }
 
     if (!authenticated || !user || user.isActive === false) {
@@ -970,6 +1015,7 @@ async function createApp() {
       authenticated: true,
       token,
       userId: session.userId,
+      firebaseUid: session.firebaseUid,
       email: session.email,
       roleId: session.roleId,
       businessId: session.businessId,
@@ -1009,20 +1055,41 @@ async function createApp() {
     }
 
     await syncDirectoryFromFirestore(false);
-    let user = serverUsersByEmail.get(verified.email);
+    const isFbAdmin = isFirebaseAdminIdentity(verified.uid, verified.email);
+    let user =
+      (verified.uid
+        ? Array.from(serverUsersByEmail.values()).find((u) => u.firebaseUid === verified.uid)
+        : undefined) || serverUsersByEmail.get(verified.email);
+
     if (!user) {
-      const isAdminEmail = verified.email === ADMIN_DEFAULT_EMAIL;
+      const defaultAdminTaken = Array.from(serverUsersByEmail.values()).some(
+        (u) => u.id === 'usr-firebase-admin' && u.email !== verified.email
+      );
       user = {
-        id: isAdminEmail ? 'usr-firebase-admin' : `usr-${Date.now()}`,
+        id: isFbAdmin
+          ? defaultAdminTaken
+            ? `usr-firebase-${verified.uid || Date.now()}`
+            : 'usr-firebase-admin'
+          : `usr-${verified.uid || Date.now()}`,
         businessId: 'biz-1',
-        name: verified.displayName || verified.email.split('@')[0] || 'Utilisateur',
+        name:
+          verified.displayName ||
+          (isFbAdmin ? 'Administrateur Firebase' : verified.email.split('@')[0] || 'Utilisateur'),
         email: verified.email,
+        firebaseUid: verified.uid,
         // Least privilege for newly created non-admin Google accounts
-        roleId: isAdminEmail ? 'role-admin' : 'role-cashier',
+        roleId: isFbAdmin ? 'role-admin' : 'role-cashier',
         locationIds: ['all'],
         isActive: true,
       };
       serverUsersByEmail.set(verified.email, user);
+    } else if (isFbAdmin) {
+      user.roleId = 'role-admin';
+      user.firebaseUid = verified.uid || user.firebaseUid;
+      user.isActive = true;
+      serverUsersByEmail.set(verified.email, user);
+    } else if (verified.uid && !user.firebaseUid) {
+      user.firebaseUid = verified.uid;
     }
 
     if (user.isActive === false) {
@@ -1040,6 +1107,7 @@ async function createApp() {
       authenticated: true,
       token,
       userId: session.userId,
+      firebaseUid: session.firebaseUid,
       email: session.email,
       roleId: session.roleId,
       businessId: session.businessId,
@@ -1058,6 +1126,7 @@ async function createApp() {
       authenticated: true,
       token: req.authToken,
       userId: session.userId,
+      firebaseUid: session.firebaseUid,
       email: session.email,
       roleId: session.roleId,
       businessId: session.businessId,
@@ -1114,6 +1183,7 @@ async function createApp() {
         authenticated: true,
         token,
         userId: session.userId,
+        firebaseUid: session.firebaseUid,
         email: session.email,
         roleId: session.roleId,
         businessId: session.businessId,

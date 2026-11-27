@@ -44,6 +44,7 @@
         "businessId": { "type": "string" },
         "name": { "type": "string" },
         "email": { "type": "string" },
+        "firebaseUid": { "type": "string" },
         "passwordHash": { "type": "string" },
         "passwordUpdatedAt": { "type": "string" },
         "roleId": { "type": "string" },
@@ -324,9 +325,24 @@
         "payload": { "type": "string" }
       },
       "required": ["id", "businessId"]
+    },
+    "Admin": {
+      "title": "Admin",
+      "description": "Comptes administrateurs autorisés dans Firebase",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "role": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["uid", "role"]
     }
   },
   "firestore": {
+    "/admins/{adminUid}": {
+      "schema": "Admin",
+      "description": "Répertoire des administrateurs Firebase"
+    },
     "/erp_state/{businessId}": {
       "schema": "ERPDatabaseState",
       "description": "État persistant de l'ERP et de ses modules pour chaque entreprise"

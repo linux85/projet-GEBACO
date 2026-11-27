@@ -4,6 +4,7 @@ import { auth, signInWithEmailAndPassword, signInWithGoogle } from '../../lib/fi
 import gebacoLogo from '../../assets/images/logo_gebaco_1788877200494.jpg';
 
 export interface AuthenticatedUserProfile {
+  uid?: string;
   email: string;
   displayName?: string | null;
   photoURL?: string | null;
@@ -125,6 +126,7 @@ export const LoginForm: React.FC<LoginFormProps> = ({
       const firebaseIdToken = await credential.user.getIdToken();
 
       const outcome = await onSuccess?.({
+        uid: credential.user.uid,
         email: credential.user.email || trimmedEmail,
         displayName: credential.user.displayName,
         photoURL: credential.user.photoURL,
@@ -160,6 +162,7 @@ export const LoginForm: React.FC<LoginFormProps> = ({
 
       const firebaseIdToken = await result.user.getIdToken();
       const outcome = await onSuccess?.({
+        uid: result.user.uid,
         email: userEmail,
         displayName: result.user.displayName,
         photoURL: result.user.photoURL,

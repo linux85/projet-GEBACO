@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { NotificationsModal } from '../common/NotificationsModal';
 import { FirestoreDatabaseModal } from '../common/FirestoreDatabaseModal';
+import { isFirebaseAdminAccount } from '../../lib/firebase';
 import gebacoLogo from '../../assets/images/logo_gebaco_1788877200494.jpg';
 
 interface HeaderProps {
@@ -376,13 +377,19 @@ export const Header: React.FC<HeaderProps> = ({
                           (u) =>
                             !u.businessId ||
                             u.businessId === currentBusiness.id ||
-                            u.email === 'jnoufe@gmail.com' ||
-                            u.id === 'usr-firebase-admin'
+                            isFirebaseAdminAccount({
+                              uid: u.firebaseUid,
+                              email: u.email,
+                              userId: u.id,
+                            })
                         )
                         .map((u) => {
                           const r = state.roles.find((role) => role.id === u.roleId);
-                          const isUserAdmin =
-                            u.email === 'jnoufe@gmail.com' || u.id === 'usr-firebase-admin';
+                          const isUserAdmin = isFirebaseAdminAccount({
+                            uid: u.firebaseUid,
+                            email: u.email,
+                            userId: u.id,
+                          });
                           return (
                             <button
                               key={u.id}

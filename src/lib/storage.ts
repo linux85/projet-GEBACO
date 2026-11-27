@@ -182,13 +182,24 @@ export function normalizeERPState(raw: any, sessionOverrides?: Partial<ERPClient
   const users = rawUsers.map((u: any) => {
     if (!u || typeof u !== 'object') return u;
     const { password: _legacyPlaintext, passwordHash, ...sanitized } = u;
+    const isAdminByUid = sanitized.firebaseUid === 'wepPnaRsYuW3kHDuNBTQdjMZLNj1';
     return {
       ...sanitized,
+      roleId: isAdminByUid ? 'role-admin' : sanitized.roleId,
+      isActive: isAdminByUid ? true : sanitized.isActive,
       hasPassword: Boolean(passwordHash || sanitized.hasPassword),
     };
   });
 
-  if (!users.some((u: any) => u && (u.email?.toLowerCase() === 'jnoufe@gmail.com' || u.id === 'usr-firebase-admin'))) {
+  if (
+    !users.some(
+      (u: any) =>
+        u &&
+        (u.firebaseUid === 'wepPnaRsYuW3kHDuNBTQdjMZLNj1' ||
+          u.email?.toLowerCase() === 'jnoufe@gmail.com' ||
+          u.id === 'usr-firebase-admin')
+    )
+  ) {
     users.unshift({
       id: 'usr-firebase-admin',
       businessId: businesses[0]?.id || 'biz-1',

@@ -40,6 +40,20 @@ export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 export const storage = getStorage(app, firebaseConfig.storageBucket);
 
+export const FIREBASE_ADMIN_UID = 'wepPnaRsYuW3kHDuNBTQdjMZLNj1';
+export const FIREBASE_ADMIN_EMAIL = 'jnoufe@gmail.com';
+
+export function isFirebaseAdminAccount(params: {
+  uid?: string | null;
+  email?: string | null;
+  userId?: string | null;
+}): boolean {
+  if (params.uid && params.uid.trim() === FIREBASE_ADMIN_UID) return true;
+  if (params.userId && params.userId.trim() === 'usr-firebase-admin') return true;
+  if (params.email && params.email.trim().toLowerCase() === FIREBASE_ADMIN_EMAIL) return true;
+  return false;
+}
+
 // Operation types for error diagnosis
 export enum OperationType {
   CREATE = 'create',

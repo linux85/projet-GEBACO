@@ -9,6 +9,7 @@ export interface ServerSessionInfo {
   code?: string;
   message?: string;
   userId?: string;
+  firebaseUid?: string;
   email?: string;
   roleId?: string;
   businessId?: string;
@@ -139,6 +140,7 @@ export async function loginWithPasswordOnServer(
         authenticated: true,
         status: res.status,
         userId: data.userId,
+        firebaseUid: typeof data.firebaseUid === 'string' ? data.firebaseUid : undefined,
         email: data.email,
         roleId: data.roleId,
         businessId: data.businessId,
@@ -197,6 +199,7 @@ export async function createServerSession(payload: {
         authenticated: true,
         status: res.status,
         userId: data.userId,
+        firebaseUid: typeof data.firebaseUid === 'string' ? data.firebaseUid : undefined,
         email: data.email,
         roleId: data.roleId,
         businessId: data.businessId,
@@ -249,6 +252,7 @@ export async function checkServerSession(): Promise<ServerSessionInfo> {
         authenticated: true,
         status: res.status,
         userId: data.userId,
+        firebaseUid: typeof data.firebaseUid === 'string' ? data.firebaseUid : undefined,
         email: data.email,
         roleId: data.roleId,
         businessId: data.businessId,
@@ -408,6 +412,7 @@ export async function switchUserOnServer(targetUserId: string): Promise<ServerSe
         authenticated: true,
         status: res.status,
         userId: data.userId,
+        firebaseUid: typeof data.firebaseUid === 'string' ? data.firebaseUid : undefined,
         email: data.email,
         roleId: data.roleId,
         businessId: data.businessId,

@@ -14,6 +14,10 @@ import {
   auth,
   firebaseSignOut,
   signInWithEmailAndPassword,
+  onAuthStateChanged,
+  FIREBASE_ADMIN_UID,
+  FIREBASE_ADMIN_EMAIL,
+  isFirebaseAdminAccount,
 } from '../lib/firebase';
 import {
   checkServerSession,
@@ -203,14 +207,67 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [logoutReason, setLogoutReason] = useState<string | null>(null);
   const [idleTimeoutMs, setIdleTimeoutMs] = useState<number>(DEFAULT_IDLE_TIMEOUT_MS);
   const [warningLeadMs, setWarningLeadMs] = useState<number>(DEFAULT_WARNING_LEAD_MS);
+  const [firebaseAuthUid, setFirebaseAuthUid] = useState<string | null>(() => auth.currentUser?.uid || null);
   const isInitialCloudLoadDone = useRef(false);
   const isSyncingFromCloud = useRef(false);
 
   const clearLogoutReason = () => setLogoutReason(null);
 
-  // Initialize Cloud Sync with Firestore
+  // Track Firebase Authentication user UID changes and automatically recognize the Firebase Admin UID
+  useEffect(() => {
+    const unsubscribeAuth = onAuthStateChanged(auth, (fbUser) => {
+      const uid = fbUser?.uid || null;
+      setFirebaseAuthUid(uid);
+
+      if (uid === FIREBASE_ADMIN_UID) {
+        const fbEmail = fbUser?.email?.trim().toLowerCase();
+        setState((prev) => {
+          if (!prev.isAuthenticated) return prev;
+          const activeUser = prev.users.find((u) => u && u.id === prev.currentUserId);
+          if (
+            activeUser &&
+            activeUser.firebaseUid === FIREBASE_ADMIN_UID &&
+            activeUser.roleId === 'role-admin' &&
+            activeUser.isActive !== false
+          ) {
+            return prev;
+          }
+          const matchingUser =
+            prev.users.find(
+              (u) =>
+                u &&
+                (u.firebaseUid === FIREBASE_ADMIN_UID ||
+                  (fbEmail && u.email?.trim().toLowerCase() === fbEmail))
+            ) || activeUser;
+
+          if (!matchingUser) return prev;
+          const nextUsers = prev.users.map((u) =>
+            u && u.id === matchingUser.id
+              ? {
+                  ...u,
+                  firebaseUid: FIREBASE_ADMIN_UID,
+                  roleId: 'role-admin',
+                  isActive: true,
+                }
+              : u
+          );
+          const next: ERPState = {
+            ...prev,
+            users: nextUsers,
+            currentUserId: matchingUser.id,
+          };
+          saveERPState(next);
+          return next;
+        });
+      }
+    });
+    return unsubscribeAuth;
+  }, []);
+
+  // Initialize Cloud Sync with Firestore once Firebase Auth is ready
   useEffect(() => {
     let unsubscribeSnapshot: (() => void) | null = null;
+    let cancelled = false;
 
     async function initCloudSync() {
       if (!navigator.onLine) {
@@ -219,9 +276,17 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return;
       }
 
+      // Firestore rules require an authenticated Firebase session
+      if (!firebaseAuthUid) {
+        isInitialCloudLoadDone.current = true;
+        return;
+      }
+
       try {
         setCloudSyncStatus('syncing');
         const cloudData = await loadERPStateFromCloud();
+        if (cancelled) return;
+
         if (cloudData && cloudData.businesses && cloudData.businesses.length > 0) {
           isSyncingFromCloud.current = true;
           setState((prev) => {
@@ -254,16 +319,24 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setCloudSyncStatus('synced');
         } else {
           // If no data exists in cloud yet, bootstrap initial state to Firestore
-          await saveERPStateToCloud(state);
-          setLastCloudSyncTime(new Date());
-          setCloudSyncStatus('synced');
+          const saved = await saveERPStateToCloud(state);
+          if (!cancelled) {
+            if (saved) {
+              setLastCloudSyncTime(new Date());
+              setCloudSyncStatus('synced');
+            } else {
+              setCloudSyncStatus('error');
+            }
+          }
         }
       } catch (err) {
         console.error('Error initializing cloud sync with Firestore:', err);
-        setCloudSyncStatus('error');
+        if (!cancelled) setCloudSyncStatus('error');
       } finally {
-        isInitialCloudLoadDone.current = true;
+        if (!cancelled) isInitialCloudLoadDone.current = true;
       }
+
+      if (cancelled) return;
 
       // Real-time listener for multi-device / multi-tab live sync
       unsubscribeSnapshot = subscribeToERPStateCloud((incomingData) => {
@@ -304,9 +377,10 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     initCloudSync();
 
     return () => {
+      cancelled = true;
       if (unsubscribeSnapshot) unsubscribeSnapshot();
     };
-  }, []);
+  }, [firebaseAuthUid]);
 
   // Save to localStorage immediately and sync to Firebase Firestore (debounced)
   useEffect(() => {
@@ -316,6 +390,10 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (isSyncingFromCloud.current) {
       isSyncingFromCloud.current = false;
+      return;
+    }
+
+    if (!state.isAuthenticated || !auth.currentUser) {
       return;
     }
 
@@ -467,17 +545,20 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     state.currentLocationId || 'all'
   );
 
+  // Determine if active session belongs to the Firebase administrator
+  const isFirebaseAdmin = Boolean(
+    firebaseAuthUid === FIREBASE_ADMIN_UID ||
+    auth.currentUser?.uid === FIREBASE_ADMIN_UID ||
+    currentUser?.firebaseUid === FIREBASE_ADMIN_UID ||
+    currentUser?.id === 'usr-firebase-admin' ||
+    currentUser?.email?.toLowerCase() === FIREBASE_ADMIN_EMAIL
+  );
+
   const hasPermission = (perm: Role['permissions'][number]) => {
+    if (isFirebaseAdmin) return true;
     if (!currentRole || !Array.isArray(currentRole.permissions)) return true;
     return currentRole.permissions.includes(perm);
   };
-
-  // Determine if active session belongs to the Firebase administrator
-  const isFirebaseAdmin = Boolean(
-    currentUser?.email?.toLowerCase() === 'jnoufe@gmail.com' ||
-    currentUser?.id === 'usr-firebase-admin' ||
-    (auth.currentUser?.email?.toLowerCase() === 'jnoufe@gmail.com' && currentUser?.roleId === 'role-admin')
-  );
 
   // State mutators (local client session & shared entities)
   const setBusinessId = (id: string) => {
@@ -531,6 +612,7 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const loginWithFirebaseUser = async (profile: {
+    uid?: string;
     email: string;
     displayName?: string | null;
     photoURL?: string | null;
@@ -564,56 +646,88 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setLogoutReason(null);
 
+    const resolvedUid = profile.uid || auth.currentUser?.uid || sessionRes.firebaseUid;
+    if (resolvedUid) {
+      setFirebaseAuthUid(resolvedUid);
+    }
+
+    const isAdminAccount = isFirebaseAdminAccount({
+      uid: resolvedUid,
+      email: normalizedEmail,
+      userId: sessionRes.userId,
+    });
+
     const existing = state.users.find(
-      (u) => u && u.email?.trim().toLowerCase() === normalizedEmail
+      (u) =>
+        u &&
+        ((resolvedUid && u.firebaseUid === resolvedUid) ||
+          u.email?.trim().toLowerCase() === normalizedEmail)
     );
 
-    if (existing && existing.isActive === false) {
+    if (existing && existing.isActive === false && !isAdminAccount) {
       return {
         success: false,
         error: 'Email ou mot de passe incorrect. Veuillez vérifier vos identifiants.',
       };
     }
 
-    const isAdminEmail = normalizedEmail === 'jnoufe@gmail.com';
-    const resolvedUserId =
-      existing?.id || sessionRes.userId || (isAdminEmail ? 'usr-firebase-admin' : `usr-${Date.now()}`);
-
     setState((prev) => {
       const targetUser = prev.users.find(
-        (u) => u && u.email?.trim().toLowerCase() === normalizedEmail
+        (u) =>
+          u &&
+          ((resolvedUid && u.firebaseUid === resolvedUid) ||
+            u.email?.trim().toLowerCase() === normalizedEmail)
       );
 
+      const adminRole =
+        prev.roles.find((r) => r.id === 'role-admin' || r.name.toLowerCase().includes('admin')) ||
+        prev.roles[0];
+      const cashierRole = prev.roles.find((r) => r.id !== 'role-admin') || prev.roles[0];
+
       if (targetUser) {
-        const updatedUsers =
-          profile.photoURL && !targetUser.avatar
-            ? prev.users.map((u) =>
-                u.id === targetUser.id ? { ...u, avatar: profile.photoURL || u.avatar } : u
-              )
-            : prev.users;
+        const updatedTarget: User = {
+          ...targetUser,
+          firebaseUid: resolvedUid || targetUser.firebaseUid,
+          avatar: profile.photoURL || targetUser.avatar,
+          roleId: isAdminAccount ? adminRole?.id || 'role-admin' : targetUser.roleId,
+          isActive: isAdminAccount ? true : targetUser.isActive,
+          locationIds: isAdminAccount
+            ? ['all']
+            : targetUser.locationIds,
+        };
+        const updatedUsers = prev.users.map((u) => (u.id === targetUser.id ? updatedTarget : u));
         const next: ERPState = {
           ...prev,
           users: updatedUsers,
-          currentUserId: targetUser.id,
-          currentBusinessId: targetUser.businessId || prev.currentBusinessId,
-          currentLocationId: resolveLocationForUser(targetUser, prev.currentLocationId),
+          currentUserId: updatedTarget.id,
+          currentBusinessId: updatedTarget.businessId || prev.currentBusinessId,
+          currentLocationId: resolveLocationForUser(updatedTarget, prev.currentLocationId),
           isAuthenticated: true,
         };
         saveERPState(next);
         return next;
       }
 
-      const defaultRole =
-        (isAdminEmail
-          ? prev.roles.find((r) => r.id === 'role-admin' || r.name.toLowerCase().includes('admin'))
-          : prev.roles.find((r) => r.id !== 'role-admin')) || prev.roles[0];
+      const defaultAdminIdTaken = prev.users.some(
+        (u) => u && u.id === 'usr-firebase-admin' && u.email?.trim().toLowerCase() !== normalizedEmail
+      );
+      const resolvedUserId =
+        sessionRes.userId ||
+        (isAdminAccount
+          ? defaultAdminIdTaken
+            ? `usr-firebase-${resolvedUid || Date.now()}`
+            : 'usr-firebase-admin'
+          : `usr-${resolvedUid || Date.now()}`);
 
       const newUser: User = {
         id: resolvedUserId,
         businessId: prev.businesses[0]?.id || 'biz-1',
-        name: profile.displayName?.trim() || profile.email.split('@')[0] || 'Utilisateur',
+        name:
+          profile.displayName?.trim() ||
+          (isAdminAccount ? 'Administrateur Firebase' : profile.email.split('@')[0] || 'Utilisateur'),
         email: profile.email.trim(),
-        roleId: sessionRes.roleId || defaultRole?.id || 'role-cashier',
+        firebaseUid: resolvedUid,
+        roleId: isAdminAccount ? adminRole?.id || 'role-admin' : sessionRes.roleId || cashierRole?.id || 'role-cashier',
         locationIds: ['all'],
         phone: '',
         isActive: true,
@@ -655,16 +769,76 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         await firebaseSignOut(auth).catch(() => {});
       }
 
+      // Also ensure client Firebase SDK session is active so Firestore rules authorize the signed-in user
+      let resolvedFbUid = auth.currentUser?.uid || serverAuth.firebaseUid;
+      if (!auth.currentUser || auth.currentUser.email?.toLowerCase() !== normalizedEmail) {
+        try {
+          const fbCred = await signInWithEmailAndPassword(auth, trimmedEmail, passwordInput);
+          resolvedFbUid = fbCred.user.uid;
+        } catch {
+          // Local server-only account without Firebase Auth record
+        }
+      }
+      if (resolvedFbUid) {
+        setFirebaseAuthUid(resolvedFbUid);
+      }
+
+      const isAdminAccount = isFirebaseAdminAccount({
+        uid: resolvedFbUid,
+        email: normalizedEmail,
+        userId: serverAuth.userId,
+      });
+
       setState((prev) => {
         const matched = prev.users.find(
-          (u) => u && (u.id === serverAuth.userId || u.email?.trim().toLowerCase() === normalizedEmail)
+          (u) =>
+            u &&
+            ((resolvedFbUid && u.firebaseUid === resolvedFbUid) ||
+              u.id === serverAuth.userId ||
+              u.email?.trim().toLowerCase() === normalizedEmail)
         );
-        const targetId = matched?.id || serverAuth.userId!;
+
+        const adminRoleId =
+          prev.roles.find((r) => r.id === 'role-admin' || r.name.toLowerCase().includes('admin'))?.id ||
+          'role-admin';
+
+        if (matched) {
+          const updatedMatched: User = {
+            ...matched,
+            firebaseUid: resolvedFbUid || matched.firebaseUid,
+            roleId: isAdminAccount ? adminRoleId : matched.roleId,
+            isActive: isAdminAccount ? true : matched.isActive,
+          };
+          const nextUsers = prev.users.map((u) => (u.id === matched.id ? updatedMatched : u));
+          const next: ERPState = {
+            ...prev,
+            users: nextUsers,
+            currentUserId: updatedMatched.id,
+            currentBusinessId: updatedMatched.businessId || serverAuth.businessId || prev.currentBusinessId,
+            currentLocationId: resolveLocationForUser(updatedMatched, prev.currentLocationId),
+            isAuthenticated: true,
+          };
+          saveERPState(next);
+          return next;
+        }
+
+        const newUser: User = {
+          id: serverAuth.userId!,
+          businessId: serverAuth.businessId || prev.businesses[0]?.id || 'biz-1',
+          name: isAdminAccount ? 'Administrateur Firebase' : trimmedEmail.split('@')[0] || 'Utilisateur',
+          email: trimmedEmail,
+          firebaseUid: resolvedFbUid,
+          roleId: isAdminAccount ? adminRoleId : serverAuth.roleId || 'role-cashier',
+          locationIds: ['all'],
+          isActive: true,
+          status: 'active',
+        };
         const next: ERPState = {
           ...prev,
-          currentUserId: targetId,
-          currentBusinessId: matched?.businessId || serverAuth.businessId || prev.currentBusinessId,
-          currentLocationId: resolveLocationForUser(matched, prev.currentLocationId),
+          users: [...prev.users, newUser],
+          currentUserId: newUser.id,
+          currentBusinessId: newUser.businessId,
+          currentLocationId: resolveLocationForUser(newUser, prev.currentLocationId),
           isAuthenticated: true,
         };
         saveERPState(next);
@@ -695,6 +869,7 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const credential = await signInWithEmailAndPassword(auth, trimmedEmail, passwordInput);
       const firebaseIdToken = await credential.user.getIdToken();
       return loginWithFirebaseUser({
+        uid: credential.user.uid,
         email: credential.user.email || trimmedEmail,
         displayName: credential.user.displayName,
         photoURL: credential.user.photoURL,
@@ -770,14 +945,36 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (res.authenticated) {
         setIdleTimeoutMs(res.idleTimeoutMs);
         setWarningLeadMs(res.warningLeadMs);
+        const isServerFbAdmin = isFirebaseAdminAccount({
+          uid: res.firebaseUid,
+          email: res.email,
+          userId: res.userId,
+        });
         // Align client active user strictly with server-verified session identity
         if (res.userId) {
           setState((prev) => {
-            if (prev.currentUserId === res.userId) return prev;
             const matched = prev.users.find((u) => u && u.id === res.userId);
             if (!matched) return prev;
+            const needsAdminSync =
+              isServerFbAdmin &&
+              (matched.roleId !== 'role-admin' ||
+                (res.firebaseUid && matched.firebaseUid !== res.firebaseUid));
+            if (prev.currentUserId === res.userId && !needsAdminSync) return prev;
+            const nextUsers = needsAdminSync
+              ? prev.users.map((u) =>
+                  u.id === matched.id
+                    ? {
+                        ...u,
+                        roleId: 'role-admin',
+                        firebaseUid: res.firebaseUid || u.firebaseUid,
+                        isActive: true,
+                      }
+                    : u
+                )
+              : prev.users;
             const next: ERPState = {
               ...prev,
+              users: nextUsers,
               currentUserId: matched.id,
               currentBusinessId: matched.businessId || prev.currentBusinessId,
             };

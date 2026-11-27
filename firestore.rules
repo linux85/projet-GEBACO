@@ -1,103 +1,601 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Helper function to sanitize and validate document IDs
-    function isValidId(id) {
-      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    // Default-deny global catch-all safety net
+    match /{document=**} {
+      allow read, write: if false;
     }
 
-    // Test connection endpoint
+    // =========================================================================
+    // GLOBAL HARDENED HELPERS
+    // =========================================================================
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    // Static admin check without database reads (safe for `allow list` queries)
+    function isRootAdmin() {
+      return isSignedIn() && (
+        request.auth.uid == 'wepPnaRsYuW3kHDuNBTQdjMZLNj1' ||
+        (isEmailVerified() && request.auth.token.email == 'jnoufe@gmail.com')
+      );
+    }
+
+    // Full admin check including delegated /admins/{uid} lookup
+    function isAdmin() {
+      return isRootAdmin() || (
+        isSignedIn() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isStr(val, maxLen) {
+      return val is string && val.size() <= maxLen;
+    }
+
+    function isNonEmptyStr(val, maxLen) {
+      return val is string && val.size() > 0 && val.size() <= maxLen;
+    }
+
+    function isOptStr(data, key, maxLen) {
+      return !(key in data) || data[key] == null || (data[key] is string && data[key].size() <= maxLen);
+    }
+
+    function isOptNum(data, key) {
+      return !(key in data) || data[key] == null || (data[key] is number);
+    }
+
+    function isOptBool(data, key) {
+      return !(key in data) || data[key] == null || (data[key] is bool);
+    }
+
+    // =========================================================================
+    // ENTITY VALIDATION BLUEPRINTS
+    // =========================================================================
+
+    function isValidAdminDoc(data) {
+      return data.keys().hasAll(['uid', 'role']) &&
+        data.keys().hasOnly(['uid', 'role', 'createdAt']) &&
+        isNonEmptyStr(data.uid, 128) &&
+        data.role == 'admin' &&
+        isOptStr(data, 'createdAt', 64);
+    }
+
+    function isValidERPState(data) {
+      return data.keys().hasAll(['id', 'businessId']) &&
+        data.keys().hasOnly(['id', 'businessId', 'updatedAt', 'payload']) &&
+        isNonEmptyStr(data.id, 128) &&
+        isNonEmptyStr(data.businessId, 128) &&
+        isOptStr(data, 'updatedAt', 64) &&
+        isOptStr(data, 'payload', 1000000);
+    }
+
+    function isValidBusiness(data) {
+      return data.keys().hasAll(['id', 'name', 'currencySymbol', 'currencyCode']) &&
+        data.keys().hasOnly([
+          'id', 'name', 'logo', 'currencySymbol', 'currencyCode', 'currency',
+          'timezone', 'financialYearStartMonth', 'defaultProfitMargin',
+          'taxNumber', 'phone', 'email', 'address', 'skuPrefix', 'createdAt'
+        ]) &&
+        isNonEmptyStr(data.id, 128) &&
+        isNonEmptyStr(data.name, 200) &&
+        isNonEmptyStr(data.currencySymbol, 16) &&
+        isNonEmptyStr(data.currencyCode, 16) &&
+        isOptStr(data, 'logo', 200000) &&
+        isOptStr(data, 'currency', 16) &&
+        isOptStr(data, 'timezone', 64) &&
+        isOptNum(data, 'financialYearStartMonth') &&
+        isOptNum(data, 'defaultProfitMargin') &&
+        isOptStr(data, 'taxNumber', 64) &&
+        isOptStr(data, 'phone', 40) &&
+        isOptStr(data, 'email', 254) &&
+        isOptStr(data, 'address', 300) &&
+        isOptStr(data, 'skuPrefix', 32) &&
+        isOptStr(data, 'createdAt', 64);
+    }
+
+    function isValidLocation(data) {
+      return data.keys().hasAll(['id', 'businessId', 'name', 'code']) &&
+        data.keys().hasOnly([
+          'id', 'businessId', 'name', 'code', 'address', 'city',
+          'country', 'phone', 'email', 'invoiceLayout', 'isDefault'
+        ]) &&
+        isNonEmptyStr(data.id, 128) &&
+        isNonEmptyStr(data.businessId, 128) &&
+        isNonEmptyStr(data.name, 200) &&
+        isNonEmptyStr(data.code, 64) &&
+        isOptStr(data, 'address', 300) &&
+        isOptStr(data, 'city', 120) &&
+        isOptStr(data, 'country', 120) &&
+        isOptStr(data, 'phone', 40) &&
+        isOptStr(data, 'email', 254) &&
+        isOptBool(data, 'isDefault') &&
+        (!('invoiceLayout' in data) || data.invoiceLayout == null || data.invoiceLayout is map);
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['id', 'name', 'email', 'roleId']) &&
+        data.keys().hasOnly([
+          'id', 'businessId', 'name', 'email', 'firebaseUid', 'passwordHash',
+          'hasPassword', 'passwordUpdatedAt', 'roleId', 'locationIds',
+          'phone', 'isActive', 'status', 'avatar', 'twoFactorEnabled'
+        ]) &&
+        isNonEmptyStr(data.id, 128) &&
+        isOptStr(data, 'businessId', 128) &&
+        isNonEmptyStr(data.name, 200) &&
+        isNonEmptyStr(data.email, 254) &&
+        isOptStr(data, 'firebaseUid', 128) &&
+        isOptStr(data, 'passwordHash', 512) &&
+        isOptBool(data, 'hasPassword') &&
+        isOptStr(data, 'passwordUpdatedAt', 64) &&
+        isNonEmptyStr(data.roleId, 128) &&
+        (!('locationIds' in data) || (
+          data.locationIds is list &&
+          data.locationIds.size() <= 100 &&
+          (data.locationIds.size() == 0 || isStr(data.locationIds[0], 128))
+        )) &&
+        isOptStr(data, 'phone', 40) &&
+        isOptBool(data, 'isActive') &&
+        isOptStr(data, 'status', 32) &&
+        isOptStr(data, 'avatar', 200000) &&
+        isOptBool(data, 'twoFactorEnabled');
+    }
+
+    function isValidRole(data) {
+      return data.keys().hasAll(['id', 'name', 'permissions']) &&
+        data.keys().hasOnly(['id', 'businessId', 'name', 'isPredefined', 'description', 'permissions']) &&
+        isNonEmptyStr(data.id, 128) &&
+        isOptStr(data, 'businessId', 128) &&
+        isNonEmptyStr(data.name, 120) &&
+        isOptBool(data, 'isPredefined') &&
+        isOptStr(data, 'description', 500) &&
+        data.permissions is list &&
+        data.permissions.size() <= 50 &&
+        (data.permissions.size() == 0 || isStr(data.permissions[0], 64));
+    }
+
+    function isValidContact(data) {
+      return data.keys().hasAll(['id', 'businessId', 'type', 'name', 'phone']) &&
+        data.keys().hasOnly([
+          'id', 'businessId', 'type', 'name', 'companyName', 'email', 'phone',
+          'address', 'taxNumber', 'creditLimit', 'paymentTermsDays',
+          'currentBalance', 'isDefaultWalkIn'
+        ]) &&
+        isNonEmptyStr(data.id, 128) &&
+        isNonEmptyStr(data.businessId, 128) &&
+        data.type in ['customer', 'supplier', 'both'] &&
+        isNonEmptyStr(data.name, 200) &&
+        isStr(data.phone, 40) &&
+        isOptStr(data, 'companyName', 200) &&
+        isOptStr(data, 'email', 254) &&
+        isOptStr(data, 'address', 300) &&
+        isOptStr(data, 'taxNumber', 64) &&
+        isOptNum(data, 'creditLimit') &&
+        isOptNum(data, 'paymentTermsDays') &&
+        isOptNum(data, 'currentBalance') &&
+        isOptBool(data, 'isDefaultWalkIn');
+    }
+
+    function isValidProduct(data) {
+      return data.keys().hasAll(['id', 'businessId', 'name', 'sku', 'unitId', 'sellingPrice']) &&
+        data.keys().hasOnly([
+          'id', 'businessId', 'name', 'type', 'sku', 'barcode', 'brandId',
+          'categoryId', 'subCategoryId', 'unitId', 'image', 'description',
+          'alertQuantity', 'taxRate', 'purchasePrice', 'profitMargin',
+          'sellingPrice', 'locationStock', 'variations', 'variationTemplateId'
+        ]) &&
+        isNonEmptyStr(data.id, 128) &&
+        isNonEmptyStr(data.businessId, 128) &&
+        isNonEmptyStr(data.name, 250) &&
+        isOptStr(data, 'type', 32) &&
+        isNonEmptyStr(data.sku, 128) &&
+        isOptStr(data, 'barcode', 128) &&
+        isOptStr(data, 'brandId', 128) &&
+        isOptStr(data, 'categoryId', 128) &&
+        isOptStr(data, 'subCategoryId', 128) &&
+        isNonEmptyStr(data.unitId, 128) &&
+        isOptStr(data, 'image', 200000) &&
+        isOptStr(data, 'description', 2000) &&
+        isOptNum(data, 'alertQuantity') &&
+        isOptNum(data, 'taxRate') &&
+        isOptNum(data, 'purchasePrice') &&
+        isOptNum(data, 'profitMargin') &&
+        data.sellingPrice is number &&
+        (!('locationStock' in data) || data.locationStock == null || data.locationStock is map) &&
+        (!('variations' in data) || data.variations == null || (data.variations is list && data.variations.size() <= 200)) &&
+        isOptStr(data, 'variationTemplateId', 128);
+    }
+
+    function isValidCatalogLookup(data) {
+      return data.keys().hasAll(['id', 'businessId', 'name']) &&
+        data.keys().hasOnly(['id', 'businessId', 'name', 'description', 'code', 'shortName', 'allowDecimal']) &&
+        isNonEmptyStr(data.id, 128) &&
+        isNonEmptyStr(data.businessId, 128) &&
+        isNonEmptyStr(data.name, 200) &&
+        isOptStr(data, 'description', 500) &&
+        isOptStr(data, 'code', 64) &&
+        isOptStr(data, 'shortName', 32) &&
+        isOptBool(data, 'allowDecimal');
+    }
+
+    function isValidPurchase(data) {
+      return data.keys().hasAll(['id', 'businessId', 'locationId', 'supplierId', 'referenceNo', 'totalAmount']) &&
+        data.keys().hasOnly([
+          'id', 'businessId', 'locationId', 'supplierId', 'referenceNo',
+          'purchaseDate', 'paymentDueDate', 'status', 'paymentStatus', 'items',
+          'discountAmount', 'taxAmount', 'totalAmount', 'paidAmount', 'dueAmount', 'notes'
+        ]) &&
+        isNonEmptyStr(data.id, 128) &&
+        isNonEmptyStr(data.businessId, 128) &&
+        isNonEmptyStr(data.locationId, 128) &&
+        isNonEmptyStr(data.supplierId, 128) &&
+        isNonEmptyStr(data.referenceNo, 128) &&
+        isOptStr(data, 'purchaseDate', 64) &&
+        isOptStr(data, 'paymentDueDate', 64) &&
+        isOptStr(data, 'status', 32) &&
+        isOptStr(data, 'paymentStatus', 32) &&
+        (!('items' in data) || (data.items is list && data.items.size() <= 500)) &&
+        isOptNum(data, 'discountAmount') &&
+        isOptNum(data, 'taxAmount') &&
+        data.totalAmount is number &&
+        isOptNum(data, 'paidAmount') &&
+        isOptNum(data, 'dueAmount') &&
+        isOptStr(data, 'notes', 2000);
+    }
+
+    function isValidSale(data) {
+      return data.keys().hasAll(['id', 'businessId', 'locationId', 'customerId', 'invoiceNo', 'totalAmount']) &&
+        data.keys().hasOnly([
+          'id', 'businessId', 'locationId', 'customerId', 'userId', 'invoiceNo',
+          'saleDate', 'status', 'paymentStatus', 'paymentMethod', 'items',
+          'discountAmount', 'taxAmount', 'totalAmount', 'paidAmount', 'dueAmount',
+          'notes', 'isExpress'
+        ]) &&
+        isNonEmptyStr(data.id, 128) &&
+        isNonEmptyStr(data.businessId, 128) &&
+        isNonEmptyStr(data.locationId, 128) &&
+        isNonEmptyStr(data.customerId, 128) &&
+        isOptStr(data, 'userId', 128) &&
+        isNonEmptyStr(data.invoiceNo, 128) &&
+        isOptStr(data, 'saleDate', 64) &&
+        isOptStr(data, 'status', 32) &&
+        isOptStr(data, 'paymentStatus', 32) &&
+        isOptStr(data, 'paymentMethod', 32) &&
+        (!('items' in data) || (data.items is list && data.items.size() <= 500)) &&
+        isOptNum(data, 'discountAmount') &&
+        isOptNum(data, 'taxAmount') &&
+        data.totalAmount is number &&
+        isOptNum(data, 'paidAmount') &&
+        isOptNum(data, 'dueAmount') &&
+        isOptStr(data, 'notes', 2000) &&
+        isOptBool(data, 'isExpress');
+    }
+
+    function isValidExpense(data) {
+      return data.keys().hasAll(['id', 'businessId', 'locationId', 'categoryId', 'referenceNo', 'amount']) &&
+        data.keys().hasOnly([
+          'id', 'businessId', 'locationId', 'categoryId', 'referenceNo',
+          'expenseDate', 'amount', 'paymentMethod', 'note', 'attachmentUrl'
+        ]) &&
+        isNonEmptyStr(data.id, 128) &&
+        isNonEmptyStr(data.businessId, 128) &&
+        isNonEmptyStr(data.locationId, 128) &&
+        isNonEmptyStr(data.categoryId, 128) &&
+        isNonEmptyStr(data.referenceNo, 128) &&
+        isOptStr(data, 'expenseDate', 64) &&
+        data.amount is number &&
+        isOptStr(data, 'paymentMethod', 32) &&
+        isOptStr(data, 'note', 2000) &&
+        isOptStr(data, 'attachmentUrl', 200000);
+    }
+
+    function isValidStockAdjustment(data) {
+      return data.keys().hasAll(['id', 'businessId', 'locationId', 'referenceNo', 'productId', 'quantity']) &&
+        data.keys().hasOnly([
+          'id', 'businessId', 'locationId', 'referenceNo', 'date',
+          'type', 'productId', 'variationId', 'quantity', 'reason'
+        ]) &&
+        isNonEmptyStr(data.id, 128) &&
+        isNonEmptyStr(data.businessId, 128) &&
+        isNonEmptyStr(data.locationId, 128) &&
+        isNonEmptyStr(data.referenceNo, 128) &&
+        isOptStr(data, 'date', 64) &&
+        isOptStr(data, 'type', 32) &&
+        isNonEmptyStr(data.productId, 128) &&
+        isOptStr(data, 'variationId', 128) &&
+        data.quantity is number &&
+        isOptStr(data, 'reason', 1000);
+    }
+
+    function isValidStockTransfer(data) {
+      return data.keys().hasAll(['id', 'businessId', 'referenceNo', 'fromLocationId', 'toLocationId', 'productId', 'quantity']) &&
+        data.keys().hasOnly([
+          'id', 'businessId', 'referenceNo', 'date', 'fromLocationId',
+          'toLocationId', 'productId', 'variationId', 'quantity', 'status', 'notes', 'createdBy'
+        ]) &&
+        isNonEmptyStr(data.id, 128) &&
+        isNonEmptyStr(data.businessId, 128) &&
+        isNonEmptyStr(data.referenceNo, 128) &&
+        isOptStr(data, 'date', 64) &&
+        isNonEmptyStr(data.fromLocationId, 128) &&
+        isNonEmptyStr(data.toLocationId, 128) &&
+        isNonEmptyStr(data.productId, 128) &&
+        isOptStr(data, 'variationId', 128) &&
+        data.quantity is number &&
+        isOptStr(data, 'status', 32) &&
+        isOptStr(data, 'notes', 1000) &&
+        isOptStr(data, 'createdBy', 128);
+    }
+
+    function isValidStockInventory(data) {
+      return data.keys().hasAll(['id', 'businessId', 'locationId', 'referenceNo', 'title', 'status']) &&
+        data.keys().hasOnly([
+          'id', 'businessId', 'locationId', 'referenceNo', 'title', 'type',
+          'categoryIds', 'status', 'startDate', 'completedDate', 'countedBy',
+          'supervisedBy', 'notes', 'isBlindCount', 'items',
+          'totalTheoreticalQty', 'totalPhysicalQty', 'totalVarianceQty',
+          'totalVarianceCost', 'accuracyRate'
+        ]) &&
+        isNonEmptyStr(data.id, 128) &&
+        isNonEmptyStr(data.businessId, 128) &&
+        isNonEmptyStr(data.locationId, 128) &&
+        isNonEmptyStr(data.referenceNo, 128) &&
+        isNonEmptyStr(data.title, 250) &&
+        isOptStr(data, 'type', 32) &&
+        (!('categoryIds' in data) || data.categoryIds == null || (data.categoryIds is list && data.categoryIds.size() <= 100)) &&
+        isNonEmptyStr(data.status, 32) &&
+        isOptStr(data, 'startDate', 64) &&
+        isOptStr(data, 'completedDate', 64) &&
+        isOptStr(data, 'countedBy', 128) &&
+        isOptStr(data, 'supervisedBy', 128) &&
+        isOptStr(data, 'notes', 2000) &&
+        isOptBool(data, 'isBlindCount') &&
+        (!('items' in data) || (data.items is list && data.items.size() <= 1000)) &&
+        isOptNum(data, 'totalTheoreticalQty') &&
+        isOptNum(data, 'totalPhysicalQty') &&
+        isOptNum(data, 'totalVarianceQty') &&
+        isOptNum(data, 'totalVarianceCost') &&
+        isOptNum(data, 'accuracyRate');
+    }
+
+    function isValidRegisterLog(data) {
+      return data.keys().hasAll(['id', 'businessId', 'locationId', 'userId', 'openedAt', 'status']) &&
+        data.keys().hasOnly([
+          'id', 'businessId', 'locationId', 'userId', 'openedAt', 'closedAt',
+          'initialCash', 'totalCashSales', 'totalCardSales', 'totalMobileSales',
+          'totalExpenses', 'closingCashCalculated', 'closingCashActual', 'notes', 'status'
+        ]) &&
+        isNonEmptyStr(data.id, 128) &&
+        isNonEmptyStr(data.businessId, 128) &&
+        isNonEmptyStr(data.locationId, 128) &&
+        isNonEmptyStr(data.userId, 128) &&
+        isNonEmptyStr(data.openedAt, 64) &&
+        isOptStr(data, 'closedAt', 64) &&
+        isOptNum(data, 'initialCash') &&
+        isOptNum(data, 'totalCashSales') &&
+        isOptNum(data, 'totalCardSales') &&
+        isOptNum(data, 'totalMobileSales') &&
+        isOptNum(data, 'totalExpenses') &&
+        isOptNum(data, 'closingCashCalculated') &&
+        isOptNum(data, 'closingCashActual') &&
+        isOptStr(data, 'notes', 1000) &&
+        isNonEmptyStr(data.status, 32);
+    }
+
+    function isValidBarcodeSetting(data) {
+      return data.keys().hasAll(['id', 'businessId', 'name']) &&
+        data.keys().hasOnly([
+          'id', 'businessId', 'name', 'paperWidthMm', 'paperHeightMm',
+          'labelsPerRow', 'showProductName', 'showPrice', 'showSku', 'showBusinessName'
+        ]) &&
+        isNonEmptyStr(data.id, 128) &&
+        isNonEmptyStr(data.businessId, 128) &&
+        isNonEmptyStr(data.name, 120) &&
+        isOptNum(data, 'paperWidthMm') &&
+        isOptNum(data, 'paperHeightMm') &&
+        isOptNum(data, 'labelsPerRow') &&
+        isOptBool(data, 'showProductName') &&
+        isOptBool(data, 'showPrice') &&
+        isOptBool(data, 'showSku') &&
+        isOptBool(data, 'showBusinessName');
+    }
+
+    // =========================================================================
+    // COLLECTION MATCH BLOCKS
+    // =========================================================================
+
+    // Connection check endpoint (authenticated users & admins)
     match /test/{docId} {
-      allow read, write: if true;
+      allow get: if isSignedIn() && isValidId(docId);
+      allow create, update, delete: if isAdmin() && isValidId(docId);
+    }
+
+    // Firebase Administrators directory
+    match /admins/{adminUid} {
+      allow get: if isValidId(adminUid) && (isRootAdmin() || (isSignedIn() && request.auth.uid == adminUid));
+      allow list: if isRootAdmin();
+      allow create, update: if isAdmin() && isValidId(adminUid) && isValidAdminDoc(incoming());
+      allow delete: if isAdmin() && isValidId(adminUid);
     }
 
     // Master ERP global state synchronization
     match /erp_state/{stateId} {
-      allow read, write: if isValidId(stateId);
+      allow get: if isSignedIn() && isValidId(stateId);
+      allow list: if isRootAdmin();
+      allow create: if isSignedIn() && isValidId(stateId) && isValidERPState(incoming());
+      allow update: if isSignedIn() && isValidId(stateId) && isValidERPState(incoming()) && (
+        isAdmin() ||
+        (incoming().id == existing().id && incoming().diff(existing()).affectedKeys().hasOnly(['businessId', 'updatedAt', 'payload']))
+      );
+      allow delete: if isAdmin() && isValidId(stateId);
     }
 
-    // Businesses & Locations
+    // Businesses & Locations (admin-managed configuration)
     match /businesses/{businessId} {
-      allow read, write: if isValidId(businessId);
+      allow get: if isSignedIn() && isValidId(businessId);
+      allow list: if isRootAdmin();
+      allow create: if isAdmin() && isValidId(businessId) && isValidBusiness(incoming());
+      allow update: if isAdmin() && isValidId(businessId) && isValidBusiness(incoming()) && incoming().id == existing().id;
+      allow delete: if isAdmin() && isValidId(businessId);
     }
 
     match /locations/{locationId} {
-      allow read, write: if isValidId(locationId);
+      allow get: if isSignedIn() && isValidId(locationId);
+      allow list: if isRootAdmin();
+      allow create: if isAdmin() && isValidId(locationId) && isValidLocation(incoming());
+      allow update: if isAdmin() && isValidId(locationId) && isValidLocation(incoming()) && incoming().id == existing().id;
+      allow delete: if isAdmin() && isValidId(locationId);
     }
 
-    // Users & Roles
+    // Users & Roles (PII isolated to admin or the user themselves)
     match /users/{userId} {
-      allow read, write: if isValidId(userId);
+      allow get: if isValidId(userId) && (isAdmin() || (isSignedIn() && existing().firebaseUid == request.auth.uid));
+      allow list: if isRootAdmin();
+      allow create: if isAdmin() && isValidId(userId) && isValidUser(incoming());
+      allow update: if isAdmin() && isValidId(userId) && isValidUser(incoming()) && incoming().id == existing().id;
+      allow delete: if isAdmin() && isValidId(userId);
     }
 
     match /roles/{roleId} {
-      allow read, write: if isValidId(roleId);
+      allow get: if isSignedIn() && isValidId(roleId);
+      allow list: if isRootAdmin();
+      allow create: if isAdmin() && isValidId(roleId) && isValidRole(incoming());
+      allow update: if isAdmin() && isValidId(roleId) && isValidRole(incoming()) && incoming().id == existing().id;
+      allow delete: if isAdmin() && isValidId(roleId);
     }
 
-    // Contacts (Customers & Suppliers)
+    // Contacts (Customers & Suppliers - PII protected)
     match /contacts/{contactId} {
-      allow read, write: if isValidId(contactId);
+      allow get: if isAdmin() && isValidId(contactId);
+      allow list: if isRootAdmin();
+      allow create: if isAdmin() && isValidId(contactId) && isValidContact(incoming());
+      allow update: if isAdmin() && isValidId(contactId) && isValidContact(incoming()) && incoming().id == existing().id;
+      allow delete: if isAdmin() && isValidId(contactId);
     }
 
     // Products, Brands, Categories, Units
     match /products/{productId} {
-      allow read, write: if isValidId(productId);
+      allow get: if isSignedIn() && isValidId(productId);
+      allow list: if isRootAdmin();
+      allow create: if isAdmin() && isValidId(productId) && isValidProduct(incoming());
+      allow update: if isAdmin() && isValidId(productId) && isValidProduct(incoming()) && incoming().id == existing().id;
+      allow delete: if isAdmin() && isValidId(productId);
     }
 
     match /brands/{brandId} {
-      allow read, write: if isValidId(brandId);
+      allow get: if isSignedIn() && isValidId(brandId);
+      allow list: if isRootAdmin();
+      allow create: if isAdmin() && isValidId(brandId) && isValidCatalogLookup(incoming());
+      allow update: if isAdmin() && isValidId(brandId) && isValidCatalogLookup(incoming()) && incoming().id == existing().id;
+      allow delete: if isAdmin() && isValidId(brandId);
     }
 
     match /categories/{categoryId} {
-      allow read, write: if isValidId(categoryId);
+      allow get: if isSignedIn() && isValidId(categoryId);
+      allow list: if isRootAdmin();
+      allow create: if isAdmin() && isValidId(categoryId) && isValidCatalogLookup(incoming());
+      allow update: if isAdmin() && isValidId(categoryId) && isValidCatalogLookup(incoming()) && incoming().id == existing().id;
+      allow delete: if isAdmin() && isValidId(categoryId);
     }
 
     match /units/{unitId} {
-      allow read, write: if isValidId(unitId);
+      allow get: if isSignedIn() && isValidId(unitId);
+      allow list: if isRootAdmin();
+      allow create: if isAdmin() && isValidId(unitId) && isValidCatalogLookup(incoming());
+      allow update: if isAdmin() && isValidId(unitId) && isValidCatalogLookup(incoming()) && incoming().id == existing().id;
+      allow delete: if isAdmin() && isValidId(unitId);
     }
 
     // Purchases & Sales
     match /purchases/{purchaseId} {
-      allow read, write: if isValidId(purchaseId);
+      allow get: if isAdmin() && isValidId(purchaseId);
+      allow list: if isRootAdmin();
+      allow create: if isAdmin() && isValidId(purchaseId) && isValidPurchase(incoming());
+      allow update: if isAdmin() && isValidId(purchaseId) && isValidPurchase(incoming()) && incoming().id == existing().id;
+      allow delete: if isAdmin() && isValidId(purchaseId);
     }
 
     match /sales/{saleId} {
-      allow read, write: if isValidId(saleId);
+      allow get: if isAdmin() && isValidId(saleId);
+      allow list: if isRootAdmin();
+      allow create: if isAdmin() && isValidId(saleId) && isValidSale(incoming());
+      allow update: if isAdmin() && isValidId(saleId) && isValidSale(incoming()) && incoming().id == existing().id;
+      allow delete: if isAdmin() && isValidId(saleId);
     }
 
     // Expenses & Categories
     match /expenses/{expenseId} {
-      allow read, write: if isValidId(expenseId);
+      allow get: if isAdmin() && isValidId(expenseId);
+      allow list: if isRootAdmin();
+      allow create: if isAdmin() && isValidId(expenseId) && isValidExpense(incoming());
+      allow update: if isAdmin() && isValidId(expenseId) && isValidExpense(incoming()) && incoming().id == existing().id;
+      allow delete: if isAdmin() && isValidId(expenseId);
     }
 
     match /expense_categories/{categoryId} {
-      allow read, write: if isValidId(categoryId);
+      allow get: if isSignedIn() && isValidId(categoryId);
+      allow list: if isRootAdmin();
+      allow create: if isAdmin() && isValidId(categoryId) && isValidCatalogLookup(incoming());
+      allow update: if isAdmin() && isValidId(categoryId) && isValidCatalogLookup(incoming()) && incoming().id == existing().id;
+      allow delete: if isAdmin() && isValidId(categoryId);
     }
 
     // Stocks, Adjustments, Transfers, Inventories
     match /stock_adjustments/{adjustmentId} {
-      allow read, write: if isValidId(adjustmentId);
+      allow get: if isAdmin() && isValidId(adjustmentId);
+      allow list: if isRootAdmin();
+      allow create: if isAdmin() && isValidId(adjustmentId) && isValidStockAdjustment(incoming());
+      allow update: if isAdmin() && isValidId(adjustmentId) && isValidStockAdjustment(incoming()) && incoming().id == existing().id;
+      allow delete: if isAdmin() && isValidId(adjustmentId);
     }
 
     match /stock_transfers/{transferId} {
-      allow read, write: if isValidId(transferId);
+      allow get: if isAdmin() && isValidId(transferId);
+      allow list: if isRootAdmin();
+      allow create: if isAdmin() && isValidId(transferId) && isValidStockTransfer(incoming());
+      allow update: if isAdmin() && isValidId(transferId) && isValidStockTransfer(incoming()) && incoming().id == existing().id;
+      allow delete: if isAdmin() && isValidId(transferId);
     }
 
     match /stock_inventories/{inventoryId} {
-      allow read, write: if isValidId(inventoryId);
+      allow get: if isAdmin() && isValidId(inventoryId);
+      allow list: if isRootAdmin();
+      allow create: if isAdmin() && isValidId(inventoryId) && isValidStockInventory(incoming());
+      allow update: if isAdmin() && isValidId(inventoryId) && isValidStockInventory(incoming()) && incoming().id == existing().id;
+      allow delete: if isAdmin() && isValidId(inventoryId);
     }
 
     match /register_logs/{logId} {
-      allow read, write: if isValidId(logId);
+      allow get: if isAdmin() && isValidId(logId);
+      allow list: if isRootAdmin();
+      allow create: if isAdmin() && isValidId(logId) && isValidRegisterLog(incoming());
+      allow update: if isAdmin() && isValidId(logId) && isValidRegisterLog(incoming()) && incoming().id == existing().id;
+      allow delete: if isAdmin() && isValidId(logId);
     }
 
     match /barcode_settings/{settingId} {
-      allow read, write: if isValidId(settingId);
-    }
-
-    // Catch-all deny
-    match /{document=**} {
-      allow read, write: if false;
+      allow get: if isSignedIn() && isValidId(settingId);
+      allow list: if isRootAdmin();
+      allow create: if isAdmin() && isValidId(settingId) && isValidBarcodeSetting(incoming());
+      allow update: if isAdmin() && isValidId(settingId) && isValidBarcodeSetting(incoming()) && incoming().id == existing().id;
+      allow delete: if isAdmin() && isValidId(settingId);
     }
   }
 }

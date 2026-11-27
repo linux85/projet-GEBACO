@@ -34,7 +34,7 @@ import {
 } from 'lucide-react';
 import { generateStrongPassword } from '../../lib/passwordCrypto';
 import { saveUserCredentialOnServer } from '../../lib/sessionClient';
-import { provisionFirebaseUserWithPassword } from '../../lib/firebase';
+import { provisionFirebaseUserWithPassword, isFirebaseAdminAccount } from '../../lib/firebase';
 
 export const UserManager: React.FC = () => {
   const {
@@ -412,7 +412,11 @@ export const UserManager: React.FC = () => {
     setEditRolePermissions(updated);
   };
 
-  const businessUsers = state.users.filter((u) => u.businessId === currentBusiness.id);
+  const businessUsers = state.users.filter(
+    (u) =>
+      u.businessId === currentBusiness.id ||
+      isFirebaseAdminAccount({ uid: u.firebaseUid, email: u.email, userId: u.id })
+  );
   const businessRoles = state.roles.filter(
     (r) => r.isPredefined || r.businessId === currentBusiness.id
   );
@@ -537,6 +541,11 @@ export const UserManager: React.FC = () => {
                   const role = state.roles.find((r) => r.id === u.roleId);
                   const loc = state.locations.find((l) => u.locationIds?.includes(l.id));
                   const isCurrent = u.id === currentUser?.id;
+                  const isAdminAccount = isFirebaseAdminAccount({
+                    uid: u.firebaseUid,
+                    email: u.email,
+                    userId: u.id,
+                  });
                   const hasPassword = Boolean(u.hasPassword || u.passwordHash);
 
                   return (
@@ -546,7 +555,14 @@ export const UserManager: React.FC = () => {
                           {u.name.charAt(0)}
                         </div>
                         <div className="flex flex-col">
-                          <span>{u.name}</span>
+                          <div className="flex items-center gap-1.5">
+                            <span>{u.name}</span>
+                            {isAdminAccount && (
+                              <span className="px-1.5 py-0.5 bg-emerald-950 text-emerald-300 border border-emerald-700/60 rounded text-[9px] font-bold">
+                                Admin Firebase
+                              </span>
+                            )}
+                          </div>
                           {isCurrent && (
                             <span className="text-[10px] text-purple-400 font-normal">(Session active)</span>
                           )}
@@ -602,13 +618,19 @@ export const UserManager: React.FC = () => {
 
                         <button
                           onClick={() => setDeletingUser(u)}
-                          disabled={isCurrent}
+                          disabled={isCurrent || isAdminAccount}
                           className={`p-1.5 rounded-lg border transition-colors ${
-                            isCurrent
+                            isCurrent || isAdminAccount
                               ? 'bg-slate-800/40 text-slate-600 border-slate-800 cursor-not-allowed'
                               : 'bg-slate-800 hover:bg-rose-950/80 text-rose-400 hover:text-rose-300 border-slate-700 hover:border-rose-800'
                           }`}
-                          title={isCurrent ? 'Impossible de supprimer votre propre session active' : "Supprimer l'utilisateur"}
+                          title={
+                            isCurrent
+                              ? 'Impossible de supprimer votre propre session active'
+                              : isAdminAccount
+                              ? 'Le compte Administrateur Firebase est protégé'
+                              : "Supprimer l'utilisateur"
+                          }
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
