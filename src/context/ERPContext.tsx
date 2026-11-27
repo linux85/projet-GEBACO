@@ -499,7 +499,7 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const setUserId = (id: string) => {
     if (!hasPermission('manage_users')) return;
     void switchUserOnServer(id).then((res) => {
-      if (res.ok || res.offline) {
+      if (res.ok || res.offline || res.apiUnavailable) {
         if (res.ok) {
           setIdleTimeoutMs(res.idleTimeoutMs);
           setWarningLeadMs(res.warningLeadMs);
@@ -548,7 +548,7 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const sessionRes = await createServerSession({ firebaseIdToken: idToken });
-    if (!sessionRes.ok && !sessionRes.offline) {
+    if (!sessionRes.ok && !sessionRes.offline && !sessionRes.apiUnavailable) {
       return {
         success: false,
         error:
@@ -674,7 +674,7 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: true };
     }
 
-    if (!serverAuth.offline) {
+    if (!serverAuth.offline && !serverAuth.apiUnavailable) {
       if (serverAuth.status === 429) {
         return {
           success: false,
@@ -690,7 +690,7 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
-    // Offline fallback via Firebase Auth SDK if server unreachable
+    // Fallback via Firebase Auth SDK when backend API is unavailable (e.g., static hosting like Hostinger) or offline
     try {
       const credential = await signInWithEmailAndPassword(auth, trimmedEmail, passwordInput);
       const firebaseIdToken = await credential.user.getIdToken();
@@ -702,16 +702,35 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     } catch (error: any) {
       const code = error?.code || '';
-      if (code === 'auth/too-many-requests') {
-        return {
-          success: false,
-          error: 'Trop de tentatives infructueuses. Veuillez patienter avant de réessayer.',
-        };
+      switch (code) {
+        case 'auth/too-many-requests':
+          return {
+            success: false,
+            error: 'Trop de tentatives infructueuses. Veuillez patienter avant de réessayer.',
+          };
+        case 'auth/unauthorized-domain':
+          return {
+            success: false,
+            error:
+              'Ce domaine n’est pas autorisé dans Firebase Authentication (ajoutez ce domaine dans Firebase Console > Authentication > Paramètres > Domaines autorisés).',
+          };
+        case 'auth/operation-not-allowed':
+          return {
+            success: false,
+            error:
+              'La connexion Email/Mot de passe n’est pas activée dans votre console Firebase Authentication.',
+          };
+        case 'auth/network-request-failed':
+          return {
+            success: false,
+            error: 'Erreur réseau. Vérifiez votre connexion internet et réessayez.',
+          };
+        default:
+          return {
+            success: false,
+            error: 'Email ou mot de passe incorrect. Veuillez vérifier vos identifiants.',
+          };
       }
-      return {
-        success: false,
-        error: 'Email ou mot de passe incorrect. Veuillez vérifier vos identifiants.',
-      };
     }
   };
 
@@ -768,7 +787,7 @@ export const ERPProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
         return;
       }
-      if (res.offline) {
+      if (res.offline || res.apiUnavailable) {
         return;
       }
       if (res.code === 'SESSION_EXPIRED') {

@@ -18,6 +18,18 @@ export interface ServerSessionInfo {
   idleTimeoutMs: number;
   warningLeadMs: number;
   offline?: boolean;
+  apiUnavailable?: boolean;
+}
+
+function isBackendApiUnavailable(res: Response, data: unknown): boolean {
+  if (res.status === 404 || res.status === 405 || res.status === 502 || res.status === 503) {
+    return true;
+  }
+  const contentType = res.headers.get('content-type') || '';
+  if (!contentType.toLowerCase().includes('application/json') || data === null) {
+    return true;
+  }
+  return false;
 }
 
 type SessionExpiredListener = (message: string) => void;
@@ -146,6 +158,7 @@ export async function loginWithPasswordOnServer(
       status: res.status,
       code: data?.code,
       message: data?.message,
+      apiUnavailable: isBackendApiUnavailable(res, data),
       idleTimeoutMs: DEFAULT_IDLE_TIMEOUT_MS,
       warningLeadMs: DEFAULT_WARNING_LEAD_MS,
     };
@@ -154,6 +167,7 @@ export async function loginWithPasswordOnServer(
       ok: false,
       authenticated: false,
       offline: true,
+      apiUnavailable: true,
       idleTimeoutMs: DEFAULT_IDLE_TIMEOUT_MS,
       warningLeadMs: DEFAULT_WARNING_LEAD_MS,
     };
@@ -202,6 +216,7 @@ export async function createServerSession(payload: {
       status: res.status,
       code: data?.code,
       message: data?.message,
+      apiUnavailable: isBackendApiUnavailable(res, data),
       idleTimeoutMs: DEFAULT_IDLE_TIMEOUT_MS,
       warningLeadMs: DEFAULT_WARNING_LEAD_MS,
     };
@@ -210,6 +225,7 @@ export async function createServerSession(payload: {
       ok: false,
       authenticated: false,
       offline: true,
+      apiUnavailable: true,
       idleTimeoutMs: DEFAULT_IDLE_TIMEOUT_MS,
       warningLeadMs: DEFAULT_WARNING_LEAD_MS,
     };
@@ -250,12 +266,14 @@ export async function checkServerSession(): Promise<ServerSessionInfo> {
       inMemorySessionToken = null;
     }
 
+    const unavailable = isBackendApiUnavailable(res, data);
     return {
       ok: false,
       authenticated: false,
       status: res.status,
       code: data?.code,
       message: data?.message,
+      apiUnavailable: unavailable,
       idleTimeoutMs:
         typeof data?.idleTimeoutMs === 'number' ? data.idleTimeoutMs : DEFAULT_IDLE_TIMEOUT_MS,
       warningLeadMs: DEFAULT_WARNING_LEAD_MS,
@@ -265,6 +283,7 @@ export async function checkServerSession(): Promise<ServerSessionInfo> {
       ok: false,
       authenticated: false,
       offline: true,
+      apiUnavailable: true,
       idleTimeoutMs: DEFAULT_IDLE_TIMEOUT_MS,
       warningLeadMs: DEFAULT_WARNING_LEAD_MS,
     };
@@ -308,6 +327,14 @@ export async function pingServerSession(): Promise<{
       };
     }
 
+    if (isBackendApiUnavailable(res, data)) {
+      return {
+        ok: true,
+        expired: false,
+        offline: true,
+      };
+    }
+
     return {
       ok: false,
       expired: false,
@@ -316,7 +343,7 @@ export async function pingServerSession(): Promise<{
     };
   } catch {
     return {
-      ok: false,
+      ok: true,
       expired: false,
       offline: true,
     };
@@ -400,6 +427,7 @@ export async function switchUserOnServer(targetUserId: string): Promise<ServerSe
       status: res.status,
       code: data?.code,
       message: data?.message,
+      apiUnavailable: isBackendApiUnavailable(res, data),
       idleTimeoutMs: DEFAULT_IDLE_TIMEOUT_MS,
       warningLeadMs: DEFAULT_WARNING_LEAD_MS,
     };
@@ -408,6 +436,7 @@ export async function switchUserOnServer(targetUserId: string): Promise<ServerSe
       ok: false,
       authenticated: false,
       offline: true,
+      apiUnavailable: true,
       idleTimeoutMs: DEFAULT_IDLE_TIMEOUT_MS,
       warningLeadMs: DEFAULT_WARNING_LEAD_MS,
     };
