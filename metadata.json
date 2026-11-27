@@ -1,0 +1,6 @@
+{
+  "name": "GEBACO",
+  "description": "Système ERP GEBACO multi-entreprises, multi-emplacements, gestion des stocks et inventaires physiques, ventes POS, achats, contacts, dépenses et rapports.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

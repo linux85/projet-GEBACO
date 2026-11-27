@@ -1,0 +1,103 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper function to sanitize and validate document IDs
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Test connection endpoint
+    match /test/{docId} {
+      allow read, write: if true;
+    }
+
+    // Master ERP global state synchronization
+    match /erp_state/{stateId} {
+      allow read, write: if isValidId(stateId);
+    }
+
+    // Businesses & Locations
+    match /businesses/{businessId} {
+      allow read, write: if isValidId(businessId);
+    }
+
+    match /locations/{locationId} {
+      allow read, write: if isValidId(locationId);
+    }
+
+    // Users & Roles
+    match /users/{userId} {
+      allow read, write: if isValidId(userId);
+    }
+
+    match /roles/{roleId} {
+      allow read, write: if isValidId(roleId);
+    }
+
+    // Contacts (Customers & Suppliers)
+    match /contacts/{contactId} {
+      allow read, write: if isValidId(contactId);
+    }
+
+    // Products, Brands, Categories, Units
+    match /products/{productId} {
+      allow read, write: if isValidId(productId);
+    }
+
+    match /brands/{brandId} {
+      allow read, write: if isValidId(brandId);
+    }
+
+    match /categories/{categoryId} {
+      allow read, write: if isValidId(categoryId);
+    }
+
+    match /units/{unitId} {
+      allow read, write: if isValidId(unitId);
+    }
+
+    // Purchases & Sales
+    match /purchases/{purchaseId} {
+      allow read, write: if isValidId(purchaseId);
+    }
+
+    match /sales/{saleId} {
+      allow read, write: if isValidId(saleId);
+    }
+
+    // Expenses & Categories
+    match /expenses/{expenseId} {
+      allow read, write: if isValidId(expenseId);
+    }
+
+    match /expense_categories/{categoryId} {
+      allow read, write: if isValidId(categoryId);
+    }
+
+    // Stocks, Adjustments, Transfers, Inventories
+    match /stock_adjustments/{adjustmentId} {
+      allow read, write: if isValidId(adjustmentId);
+    }
+
+    match /stock_transfers/{transferId} {
+      allow read, write: if isValidId(transferId);
+    }
+
+    match /stock_inventories/{inventoryId} {
+      allow read, write: if isValidId(inventoryId);
+    }
+
+    match /register_logs/{logId} {
+      allow read, write: if isValidId(logId);
+    }
+
+    match /barcode_settings/{settingId} {
+      allow read, write: if isValidId(settingId);
+    }
+
+    // Catch-all deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

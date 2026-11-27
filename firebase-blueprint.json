@@ -1,0 +1,403 @@
+{
+  "entities": {
+    "Business": {
+      "title": "Business",
+      "description": "Entreprise / Société dans le système ERP",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "logo": { "type": "string" },
+        "currencySymbol": { "type": "string" },
+        "currencyCode": { "type": "string" },
+        "timezone": { "type": "string" },
+        "financialYearStartMonth": { "type": "number" },
+        "defaultProfitMargin": { "type": "number" },
+        "taxNumber": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "name", "currencySymbol", "currencyCode"]
+    },
+    "BusinessLocation": {
+      "title": "BusinessLocation",
+      "description": "Magasin, Boutique, Entrepôt ou Point de Vente",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "name": { "type": "string" },
+        "code": { "type": "string" },
+        "address": { "type": "string" },
+        "city": { "type": "string" },
+        "country": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" }
+      },
+      "required": ["id", "businessId", "name", "code"]
+    },
+    "User": {
+      "title": "User",
+      "description": "Utilisateurs du système ERP",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "passwordHash": { "type": "string" },
+        "passwordUpdatedAt": { "type": "string" },
+        "roleId": { "type": "string" },
+        "locationIds": { "type": "array", "items": { "type": "string" } },
+        "phone": { "type": "string" },
+        "isActive": { "type": "boolean" },
+        "avatar": { "type": "string" },
+        "twoFactorEnabled": { "type": "boolean" }
+      },
+      "required": ["id", "name", "email", "roleId"]
+    },
+    "Role": {
+      "title": "Role",
+      "description": "Rôles et permissions d'accès RBAC",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "isPredefined": { "type": "boolean" },
+        "description": { "type": "string" },
+        "permissions": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["id", "name", "permissions"]
+    },
+    "Contact": {
+      "title": "Contact",
+      "description": "Clients, Fournisseurs et Partenaires",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "type": { "type": "string", "enum": ["customer", "supplier", "both"] },
+        "name": { "type": "string" },
+        "companyName": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "address": { "type": "string" },
+        "taxNumber": { "type": "string" },
+        "creditLimit": { "type": "number" },
+        "paymentTermsDays": { "type": "number" },
+        "currentBalance": { "type": "number" },
+        "isDefaultWalkIn": { "type": "boolean" }
+      },
+      "required": ["id", "businessId", "type", "name", "phone"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Articles, Produits simples et à variantes avec suivi de stock multi-magasins",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "name": { "type": "string" },
+        "type": { "type": "string", "enum": ["single", "variable"] },
+        "sku": { "type": "string" },
+        "barcode": { "type": "string" },
+        "brandId": { "type": "string" },
+        "categoryId": { "type": "string" },
+        "subCategoryId": { "type": "string" },
+        "unitId": { "type": "string" },
+        "image": { "type": "string" },
+        "alertQuantity": { "type": "number" },
+        "taxRate": { "type": "number" },
+        "purchasePrice": { "type": "number" },
+        "profitMargin": { "type": "number" },
+        "sellingPrice": { "type": "number" }
+      },
+      "required": ["id", "businessId", "name", "sku", "unitId", "sellingPrice"]
+    },
+    "Brand": {
+      "title": "Brand",
+      "description": "Marques commerciales",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" }
+      },
+      "required": ["id", "businessId", "name"]
+    },
+    "Category": {
+      "title": "Category",
+      "description": "Catégories de produits",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "name": { "type": "string" },
+        "code": { "type": "string" }
+      },
+      "required": ["id", "businessId", "name"]
+    },
+    "Unit": {
+      "title": "Unit",
+      "description": "Unités de mesure (pcs, kg, ctn, L)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "name": { "type": "string" },
+        "shortName": { "type": "string" },
+        "allowDecimal": { "type": "boolean" }
+      },
+      "required": ["id", "businessId", "name", "shortName"]
+    },
+    "Purchase": {
+      "title": "Purchase",
+      "description": "Commandes d'achats fournisseurs et réceptions de stocks",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "locationId": { "type": "string" },
+        "supplierId": { "type": "string" },
+        "referenceNo": { "type": "string" },
+        "purchaseDate": { "type": "string" },
+        "paymentDueDate": { "type": "string" },
+        "status": { "type": "string", "enum": ["received", "pending", "ordered"] },
+        "paymentStatus": { "type": "string", "enum": ["paid", "due", "partial"] },
+        "discountAmount": { "type": "number" },
+        "taxAmount": { "type": "number" },
+        "totalAmount": { "type": "number" },
+        "paidAmount": { "type": "number" },
+        "dueAmount": { "type": "number" },
+        "notes": { "type": "string" }
+      },
+      "required": ["id", "businessId", "locationId", "supplierId", "referenceNo", "totalAmount"]
+    },
+    "Sale": {
+      "title": "Sale",
+      "description": "Ventes en caisse POS, factures et devis",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "locationId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "userId": { "type": "string" },
+        "invoiceNo": { "type": "string" },
+        "saleDate": { "type": "string" },
+        "status": { "type": "string", "enum": ["final", "draft", "quotation"] },
+        "paymentStatus": { "type": "string", "enum": ["paid", "due", "partial"] },
+        "paymentMethod": { "type": "string" },
+        "discountAmount": { "type": "number" },
+        "taxAmount": { "type": "number" },
+        "totalAmount": { "type": "number" },
+        "paidAmount": { "type": "number" },
+        "dueAmount": { "type": "number" },
+        "notes": { "type": "string" },
+        "isExpress": { "type": "boolean" }
+      },
+      "required": ["id", "businessId", "locationId", "customerId", "invoiceNo", "totalAmount"]
+    },
+    "Expense": {
+      "title": "Expense",
+      "description": "Dépenses opérationnelles",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "locationId": { "type": "string" },
+        "categoryId": { "type": "string" },
+        "referenceNo": { "type": "string" },
+        "expenseDate": { "type": "string" },
+        "amount": { "type": "number" },
+        "paymentMethod": { "type": "string" },
+        "note": { "type": "string" },
+        "attachmentUrl": { "type": "string" }
+      },
+      "required": ["id", "businessId", "locationId", "categoryId", "referenceNo", "amount"]
+    },
+    "ExpenseCategory": {
+      "title": "ExpenseCategory",
+      "description": "Catégories de charges et dépenses",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "name": { "type": "string" },
+        "code": { "type": "string" }
+      },
+      "required": ["id", "businessId", "name"]
+    },
+    "StockAdjustment": {
+      "title": "StockAdjustment",
+      "description": "Ajustements manuels de stock (pertes, casse, périmé, corrections)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "locationId": { "type": "string" },
+        "referenceNo": { "type": "string" },
+        "date": { "type": "string" },
+        "type": { "type": "string" },
+        "productId": { "type": "string" },
+        "quantity": { "type": "number" },
+        "reason": { "type": "string" }
+      },
+      "required": ["id", "businessId", "locationId", "referenceNo", "productId", "quantity"]
+    },
+    "StockTransfer": {
+      "title": "StockTransfer",
+      "description": "Transferts de stock inter-magasins",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "referenceNo": { "type": "string" },
+        "date": { "type": "string" },
+        "fromLocationId": { "type": "string" },
+        "toLocationId": { "type": "string" },
+        "productId": { "type": "string" },
+        "quantity": { "type": "number" },
+        "status": { "type": "string" },
+        "notes": { "type": "string" }
+      },
+      "required": ["id", "businessId", "referenceNo", "fromLocationId", "toLocationId", "productId", "quantity"]
+    },
+    "StockInventory": {
+      "title": "StockInventory",
+      "description": "Sessions d'inventaires physiques avec calcul automatique des écarts",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "locationId": { "type": "string" },
+        "referenceNo": { "type": "string" },
+        "title": { "type": "string" },
+        "type": { "type": "string" },
+        "status": { "type": "string" },
+        "startDate": { "type": "string" },
+        "countedBy": { "type": "string" },
+        "accuracyRate": { "type": "number" }
+      },
+      "required": ["id", "businessId", "locationId", "referenceNo", "title", "status"]
+    },
+    "RegisterLog": {
+      "title": "RegisterLog",
+      "description": "Sessions et clôtures de caisse POS",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "locationId": { "type": "string" },
+        "userId": { "type": "string" },
+        "openedAt": { "type": "string" },
+        "closedAt": { "type": "string" },
+        "initialCash": { "type": "number" },
+        "closingCashCalculated": { "type": "number" },
+        "closingCashActual": { "type": "number" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "businessId", "locationId", "userId", "openedAt", "status"]
+    },
+    "BarcodeSetting": {
+      "title": "BarcodeSetting",
+      "description": "Paramètres de génération et impression de codes-barres",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "name": { "type": "string" },
+        "paperWidthMm": { "type": "number" },
+        "paperHeightMm": { "type": "number" },
+        "labelsPerRow": { "type": "number" }
+      },
+      "required": ["id", "businessId", "name"]
+    },
+    "ERPDatabaseState": {
+      "title": "ERPDatabaseState",
+      "description": "État complet de la base de données ERP et de toutes les entités",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "businessId": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "payload": { "type": "string" }
+      },
+      "required": ["id", "businessId"]
+    }
+  },
+  "firestore": {
+    "/erp_state/{businessId}": {
+      "schema": "ERPDatabaseState",
+      "description": "État persistant de l'ERP et de ses modules pour chaque entreprise"
+    },
+    "/businesses/{businessId}": {
+      "schema": "Business",
+      "description": "Données d'entreprises"
+    },
+    "/locations/{locationId}": {
+      "schema": "BusinessLocation",
+      "description": "Magasins et emplacements"
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Utilisateurs du système"
+    },
+    "/roles/{roleId}": {
+      "schema": "Role",
+      "description": "Rôles et permissions"
+    },
+    "/contacts/{contactId}": {
+      "schema": "Contact",
+      "description": "Clients et fournisseurs"
+    },
+    "/products/{productId}": {
+      "schema": "Product",
+      "description": "Catalogue de produits et articles"
+    },
+    "/brands/{brandId}": {
+      "schema": "Brand",
+      "description": "Marques"
+    },
+    "/categories/{categoryId}": {
+      "schema": "Category",
+      "description": "Catégories de produits"
+    },
+    "/units/{unitId}": {
+      "schema": "Unit",
+      "description": "Unités de mesure"
+    },
+    "/purchases/{purchaseId}": {
+      "schema": "Purchase",
+      "description": "Achats et réceptions fournisseurs"
+    },
+    "/sales/{saleId}": {
+      "schema": "Sale",
+      "description": "Ventes et factures"
+    },
+    "/expenses/{expenseId}": {
+      "schema": "Expense",
+      "description": "Dépenses et charges"
+    },
+    "/stock_adjustments/{adjustmentId}": {
+      "schema": "StockAdjustment",
+      "description": "Ajustements de stock"
+    },
+    "/stock_transfers/{transferId}": {
+      "schema": "StockTransfer",
+      "description": "Transferts inter-magasins"
+    },
+    "/stock_inventories/{inventoryId}": {
+      "schema": "StockInventory",
+      "description": "Inventaires physiques"
+    },
+    "/register_logs/{logId}": {
+      "schema": "RegisterLog",
+      "description": "Sessions de caisse POS"
+    },
+    "/barcode_settings/{settingId}": {
+      "schema": "BarcodeSetting",
+      "description": "Paramètres d'impression de codes-barres"
+    }
+  }
+}
